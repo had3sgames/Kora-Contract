@@ -2,6 +2,7 @@
 
 use kora_shared::{
     errors::KoraError,
+    reentrancy::ReentrancyGuard,
     types::SmeProfile,
     validation::{require_non_empty_bytes, require_valid_risk_score},
 };
@@ -46,6 +47,7 @@ impl RiskRegistryContract {
         if current_admin == new_admin {
             return Err(KoraError::InvalidAddress);
         }
+        let _guard = ReentrancyGuard::new(&env)?;
         env.storage().instance().set(&DataKey::Admin, &new_admin);
         env.events().publish(
             (symbol_short!("ADM_TRF"),),
@@ -60,6 +62,7 @@ impl RiskRegistryContract {
     pub fn add_verifier(env: Env, admin: Address, verifier: Address) -> Result<(), KoraError> {
         admin.require_auth();
         Self::require_admin(&env, &admin)?;
+        let _guard = ReentrancyGuard::new(&env)?;
         env.storage()
             .persistent()
             .set(&DataKey::Verifier(verifier.clone()), &true);
@@ -74,6 +77,7 @@ impl RiskRegistryContract {
     pub fn remove_verifier(env: Env, admin: Address, verifier: Address) -> Result<(), KoraError> {
         admin.require_auth();
         Self::require_admin(&env, &admin)?;
+        let _guard = ReentrancyGuard::new(&env)?;
         // Remove the key entirely rather than setting to false to keep storage clean
         env.storage()
             .persistent()
@@ -110,6 +114,8 @@ impl RiskRegistryContract {
             return Err(KoraError::AlreadyInitialized);
         }
 
+        let _guard = ReentrancyGuard::new(&env)?;
+
         let profile = SmeProfile {
             address: sme.clone(),
             verified: true,
@@ -142,6 +148,8 @@ impl RiskRegistryContract {
         Self::require_verifier(&env, &verifier)?;
         require_valid_risk_score(new_score)?;
 
+        let _guard = ReentrancyGuard::new(&env)?;
+
         let mut profile: SmeProfile = env
             .storage()
             .persistent()
@@ -168,6 +176,7 @@ impl RiskRegistryContract {
         sme: Address,
     ) -> Result<(), KoraError> {
         caller.require_auth();
+        let _guard = ReentrancyGuard::new(&env)?;
 
         let mut profile: SmeProfile = env
             .storage()
@@ -190,6 +199,7 @@ impl RiskRegistryContract {
     pub fn record_default(env: Env, admin: Address, sme: Address) -> Result<(), KoraError> {
         admin.require_auth();
         Self::require_admin(&env, &admin)?;
+        let _guard = ReentrancyGuard::new(&env)?;
 
         let mut profile: SmeProfile = env
             .storage()
@@ -228,6 +238,8 @@ impl RiskRegistryContract {
         Self::require_verifier(&env, &verifier)?;
         require_non_empty_bytes(&debtor_hash)?;
         require_valid_risk_score(score)?;
+
+        let _guard = ReentrancyGuard::new(&env)?;
 
         env.storage()
             .persistent()
