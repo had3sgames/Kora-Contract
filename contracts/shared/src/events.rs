@@ -58,9 +58,17 @@ pub fn yield_distributed(env: &Env, invoice_id: u64, investor: &Address, yield_a
 
 // ── Marketplace Events ──────────────────────────────────────────────────────
 
+// ── Marketplace Events ────────────────────────────────────────────────────────
+
 pub fn listing_cancelled(env: &Env, invoice_id: u64, seller: &Address) {
-    emit(env, symbol_short!("LST_CXL"), (invoice_id, seller.clone()));
+    emit(env, symbol_short!("LST_CXL"), (invoice_id, seller.clone(), env.ledger().timestamp()));
 }
+
+pub fn listing_expired(env: &Env, invoice_id: u64, seller: &Address) {
+    emit(env, symbol_short!("LST_EXP"), (invoice_id, seller.clone(), env.ledger().timestamp()));
+}
+
+// ── Fee Events ────────────────────────────────────────────────────────────────
 
 pub fn fee_collected(env: &Env, invoice_id: u64, fee_amount: i128, token: &Address) {
     emit(
@@ -73,11 +81,11 @@ pub fn fee_collected(env: &Env, invoice_id: u64, fee_amount: i128, token: &Addre
 // ── Protocol Events ────────────────────────────────────────────────────────
 
 pub fn protocol_paused(env: &Env, by: &Address) {
-    emit(env, symbol_short!("PAUSED"), by.clone());
+    emit(env, symbol_short!("PAUSED"), (by.clone(), env.ledger().timestamp()));
 }
 
 pub fn protocol_unpaused(env: &Env, by: &Address) {
-    emit(env, symbol_short!("UNPAUSED"), by.clone());
+    emit(env, symbol_short!("UNPAUSED"), (by.clone(), env.ledger().timestamp()));
 }
 
 pub fn fee_withdrawn(env: &Env, token: &Address, amount: i128) {

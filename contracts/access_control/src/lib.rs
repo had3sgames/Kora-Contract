@@ -44,6 +44,9 @@ impl AccessControlContract {
     pub fn pause(env: Env, admin: Address) -> Result<(), KoraError> {
         admin.require_auth();
         Self::require_admin(&env, &admin)?;
+        if env.storage().instance().get::<_, bool>(&DataKey::Paused).unwrap_or(false) {
+            return Err(KoraError::ProtocolPaused);
+        }
         env.storage().instance().set(&DataKey::Paused, &true);
         events::protocol_paused(&env, &admin);
         Ok(())
@@ -53,6 +56,9 @@ impl AccessControlContract {
     pub fn unpause(env: Env, admin: Address) -> Result<(), KoraError> {
         admin.require_auth();
         Self::require_admin(&env, &admin)?;
+        if !env.storage().instance().get::<_, bool>(&DataKey::Paused).unwrap_or(false) {
+            return Err(KoraError::ProtocolPaused);
+        }
         env.storage().instance().set(&DataKey::Paused, &false);
         events::protocol_unpaused(&env, &admin);
         Ok(())
@@ -67,6 +73,9 @@ impl AccessControlContract {
     ) -> Result<(), KoraError> {
         admin.require_auth();
         Self::require_admin(&env, &admin)?;
+        if role == Role::Admin {
+            return Err(KoraError::Unauthorized);
+        }
         env.storage().persistent().set(&DataKey::Role(target), &role);
         Ok(())
     }
@@ -75,6 +84,13 @@ impl AccessControlContract {
     pub fn revoke_role(env: Env, admin: Address, target: Address) -> Result<(), KoraError> {
         admin.require_auth();
         Self::require_admin(&env, &admin)?;
+        let current_role = env.storage()
+            .persistent()
+            .get::<_, Role>(&DataKey::Role(target))
+            .unwrap_or(Role::None);
+        if current_role == Role::Admin {
+            return Err(KoraError::Unauthorized);
+        }
         env.storage().persistent().set(&DataKey::Role(target), &Role::None);
         Ok(())
     }
@@ -83,6 +99,9 @@ impl AccessControlContract {
     pub fn transfer_admin(env: Env, current_admin: Address, new_admin: Address) -> Result<(), KoraError> {
         current_admin.require_auth();
         Self::require_admin(&env, &current_admin)?;
+        if current_admin == new_admin {
+            return Err(KoraError::InvalidAddress);
+        }
         env.storage().instance().set(&DataKey::Admin, &new_admin);
         env.storage().persistent().set(&DataKey::Role(new_admin.clone()), &Role::Admin);
         env.storage().persistent().set(&DataKey::Role(current_admin), &Role::None);
