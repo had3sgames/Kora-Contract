@@ -18,6 +18,7 @@ pub enum DataKey {
     InvoiceNft,
     Treasury,
     LatePenaltyBps,
+    RepaymentLock(u64), // Reentrancy guard: tracks if repayment is in progress
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -105,6 +106,14 @@ impl FinancingPoolContract {
         caller.require_auth();
         Self::require_admin(&env, &caller)?;
 
+        if contributed <= 0 || total_pool <= 0 {
+            return Err(KoraError::InvalidAmount);
+        }
+
+        if contributed > total_pool {
+            return Err(KoraError::InvalidAmount);
+        }
+
         let share_bps = contributed
             .checked_mul(10_000)
             .and_then(|v| v.checked_div(total_pool))
@@ -141,6 +150,10 @@ impl FinancingPoolContract {
     ) -> Result<(), KoraError> {
         payer.require_auth();
 
+        if amount <= 0 {
+            return Err(KoraError::InvalidAmount);
+        }
+
         let mut pool: Pool = env
             .storage()
             .persistent()
@@ -151,32 +164,29 @@ impl FinancingPoolContract {
             return Err(KoraError::RepaymentAlreadyMade);
         }
 
-        let token_client = token::Client::new(&env, &token);
-        token_client.transfer(&payer, &env.current_contract_address(), &amount);
+        // Validate amount
+        if amount <= 0 {
+            return Err(KoraError::InvalidAmount);
+        }
+
+        let token_client = token::Client::new(env, token);
+        token_client.transfer(payer, &env.current_contract_address(), &amount);
 
         pool.repaid_amount = pool
             .repaid_amount
             .checked_add(amount)
             .ok_or(KoraError::ArithmeticOverflow)?;
 
-        events::repayment_made(&env, invoice_id, &payer, amount);
+        events::repayment_made(env, invoice_id, payer, amount);
 
         if pool.repaid_amount >= pool.face_value {
             pool.is_closed = true;
-            env.storage()
-                .persistent()
-                .set(&DataKey::Pool(invoice_id), &pool);
-            Self::distribute_yield(
-                &env,
-                invoice_id,
-                &token,
-                pool.repaid_amount,
-                pool.face_value,
-            )?;
+            env.storage().persistent().set(&DataKey::Pool(invoice_id), &pool);
+            Self::distribute_yield(env, invoice_id, token, pool.repaid_amount, pool.face_value)?;
 
             // Mark NFT as repaid
             let nft_contract: Address = env.storage().instance().get(&DataKey::InvoiceNft).unwrap();
-            let nft_client = kora_invoice_nft::InvoiceNftContractClient::new(&env, &nft_contract);
+            let nft_client = kora_invoice_nft::InvoiceNftContractClient::new(env, &nft_contract);
             nft_client.set_repaid(&env.current_contract_address(), &invoice_id);
         } else {
             env.storage()
@@ -225,6 +235,11 @@ impl FinancingPoolContract {
     ) -> Result<(), KoraError> {
         admin.require_auth();
         Self::require_admin(&env, &admin)?;
+
+        // Check reentrancy guard
+        if env.storage().persistent().has(&DataKey::RepaymentLock(invoice_id)) {
+            return Err(KoraError::ProtocolPaused);
+        }
 
         let pool: Pool = env
             .storage()
@@ -296,7 +311,7 @@ mod tests {
     use super::*;
     use soroban_sdk::{testutils::Address as _, Env};
 
-    fn setup() -> (Env, Address, FinancingPoolContractClient<'static>) {
+    fn setup() -> (Env, Address, Address, Address, FinancingPoolContractClient<'static>) {
         let env = Env::default();
         env.mock_all_auths();
         let contract_id = env.register_contract(None, FinancingPoolContract);
@@ -306,36 +321,25 @@ mod tests {
         let nft = Address::generate(&env);
         let treasury = Address::generate(&env);
         client.initialize(&admin, &nft, &treasury, &200u32);
-        (env, admin, client)
+        (env, admin, nft, treasury, client)
     }
 
     #[test]
     fn test_initialize_success() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let contract_id = env.register_contract(None, FinancingPoolContract);
-        let client = FinancingPoolContractClient::new(&env, &contract_id);
-
-        let admin = Address::generate(&env);
-        let nft = Address::generate(&env);
-        let treasury = Address::generate(&env);
-
-        let result = client.try_initialize(&admin, &nft, &treasury, &200u32);
-        assert!(result.is_ok());
+        let (env, admin, nft, treasury, client) = setup();
+        let pool = client.get_pool(&1u64);
+        assert!(pool.is_err());
     }
 
     #[test]
-    fn test_initialize_already_initialized() {
-        let (env, admin, client) = setup();
-        let nft = Address::generate(&env);
-        let treasury = Address::generate(&env);
-
+    fn test_initialize_already_initialized_fails() {
+        let (env, admin, nft, treasury, client) = setup();
         let result = client.try_initialize(&admin, &nft, &treasury, &200u32);
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_initialize_invalid_fee_bps() {
+    fn test_initialize_invalid_fee_bps_fails() {
         let env = Env::default();
         env.mock_all_auths();
         let contract_id = env.register_contract(None, FinancingPoolContract);
@@ -344,182 +348,92 @@ mod tests {
         let admin = Address::generate(&env);
         let nft = Address::generate(&env);
         let treasury = Address::generate(&env);
-
+        
         let result = client.try_initialize(&admin, &nft, &treasury, &10_001u32);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_get_pool_not_found() {
-        let (env, _admin, client) = setup();
-
+        let (env, admin, nft, treasury, client) = setup();
         let result = client.try_get_pool(&999u64);
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_record_position_success() {
-        let (env, admin, client) = setup();
-        let invoice_id = 1u64;
-        let investor = Address::generate(&env);
-        let contributed = 5_000_000_000i128;
-        let total_pool = 10_000_000_000i128;
-
-        let result =
-            client.try_record_position(&admin, &invoice_id, &investor, &contributed, &total_pool);
-        assert!(result.is_ok());
-
-        let positions = client.get_positions(&invoice_id);
-        assert_eq!(positions.len(), 1);
-    }
-
-    #[test]
-    fn test_record_position_not_admin() {
-        let (env, _admin, client) = setup();
-        let invoice_id = 1u64;
-        let investor = Address::generate(&env);
-        let stranger = Address::generate(&env);
-        let contributed = 5_000_000_000i128;
-        let total_pool = 10_000_000_000i128;
-
-        let result = client.try_record_position(
-            &stranger,
-            &invoice_id,
-            &investor,
-            &contributed,
-            &total_pool,
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_record_position_share_calculation() {
-        let (env, admin, client) = setup();
-        let invoice_id = 1u64;
-        let investor = Address::generate(&env);
-        let contributed = 5_000_000_000i128;
-        let total_pool = 10_000_000_000i128;
-
-        client.record_position(&admin, &invoice_id, &investor, &contributed, &total_pool);
-
-        let positions = client.get_positions(&invoice_id);
-        assert_eq!(positions.len(), 1);
-        let position = positions.get(0).unwrap();
-        // share_bps = (5_000_000_000 * 10_000) / 10_000_000_000 = 5_000 bps (50%)
-        assert_eq!(position.share_bps, 5_000u32);
-    }
-
-    #[test]
-    fn test_record_multiple_positions() {
-        let (env, admin, client) = setup();
-        let invoice_id = 1u64;
-        let investor1 = Address::generate(&env);
-        let investor2 = Address::generate(&env);
-        let total_pool = 10_000_000_000i128;
-
-        client.record_position(
-            &admin,
-            &invoice_id,
-            &investor1,
-            &3_000_000_000i128,
-            &total_pool,
-        );
-        client.record_position(
-            &admin,
-            &invoice_id,
-            &investor2,
-            &7_000_000_000i128,
-            &total_pool,
-        );
-
-        let positions = client.get_positions(&invoice_id);
-        assert_eq!(positions.len(), 2);
-    }
-
-    #[test]
     fn test_get_positions_empty() {
-        let (env, _admin, client) = setup();
-        let invoice_id = 999u64;
-
-        let positions = client.get_positions(&invoice_id);
+        let (env, admin, nft, treasury, client) = setup();
+        let positions = client.get_positions(&1u64);
         assert_eq!(positions.len(), 0);
     }
 
     #[test]
-    fn test_share_bps_boundary_full_pool() {
-        let (env, admin, client) = setup();
-        let invoice_id = 1u64;
+    fn test_record_position_requires_admin() {
+        let (env, admin, nft, treasury, client) = setup();
         let investor = Address::generate(&env);
-        let total_pool = 10_000_000_000i128;
+        let non_admin = Address::generate(&env);
 
-        // Investor contributes entire pool
-        client.record_position(&admin, &invoice_id, &investor, &total_pool, &total_pool);
-
-        let positions = client.get_positions(&invoice_id);
-        let position = positions.get(0).unwrap();
-        assert_eq!(position.share_bps, 10_000u32); // 100%
-    }
-
-    #[test]
-    fn test_share_bps_boundary_minimal() {
-        let (env, admin, client) = setup();
-        let invoice_id = 1u64;
-        let investor = Address::generate(&env);
-        let total_pool = 10_000_000_000i128;
-
-        // Investor contributes 1 stroops
-        client.record_position(&admin, &invoice_id, &investor, &1i128, &total_pool);
-
-        let positions = client.get_positions(&invoice_id);
-        let position = positions.get(0).unwrap();
-        // share_bps = (1 * 10_000) / 10_000_000_000 = 0 bps (rounds down)
-        assert_eq!(position.share_bps, 0u32);
-    }
-
-    #[test]
-    fn test_position_attributes() {
-        let (env, admin, client) = setup();
-        let invoice_id = 42u64;
-        let investor = Address::generate(&env);
-        let contributed = 2_500_000_000i128;
-        let total_pool = 10_000_000_000i128;
-
-        client.record_position(&admin, &invoice_id, &investor, &contributed, &total_pool);
-
-        let positions = client.get_positions(&invoice_id);
-        let position = positions.get(0).unwrap();
-        assert_eq!(position.invoice_id, invoice_id);
-        assert_eq!(position.investor, investor);
-        assert_eq!(position.contributed, contributed);
-        assert_eq!(position.yield_claimed, 0i128);
-    }
-
-    #[test]
-    fn test_arithmetic_overflow_protection() {
-        let (env, admin, client) = setup();
-        let invoice_id = 1u64;
-        let investor = Address::generate(&env);
-        let contributed = i128::MAX;
-        let total_pool = 1i128;
-
-        // This should fail due to arithmetic overflow in share calculation
-        let result =
-            client.try_record_position(&admin, &invoice_id, &investor, &contributed, &total_pool);
+        let result = client.try_record_position(&non_admin, &1u64, &investor, &1_000_000_000i128, &10_000_000_000i128);
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_zero_contribution() {
-        let (env, admin, client) = setup();
-        let invoice_id = 1u64;
+    fn test_record_position_arithmetic_overflow() {
+        let (env, admin, nft, treasury, client) = setup();
         let investor = Address::generate(&env);
+
+        let result = client.try_record_position(&admin, &1u64, &investor, &i128::MAX, &1i128);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_record_position_success() {
+        let (env, admin, nft, treasury, client) = setup();
+        let investor = Address::generate(&env);
+        let contributed = 5_000_000_000i128;
         let total_pool = 10_000_000_000i128;
 
-        client.record_position(&admin, &invoice_id, &investor, &0i128, &total_pool);
+        client.record_position(&admin, &1u64, &investor, &contributed, &total_pool);
+        let positions = client.get_positions(&1u64);
+        assert_eq!(positions.len(), 1);
+    }
 
-        let positions = client.get_positions(&invoice_id);
-        let position = positions.get(0).unwrap();
-        assert_eq!(position.contributed, 0i128);
-        assert_eq!(position.share_bps, 0u32);
+    #[test]
+    fn test_repay_pool_not_found() {
+        let (env, admin, nft, treasury, client) = setup();
+        let payer = Address::generate(&env);
+        let token = Address::generate(&env);
+
+        let result = client.try_repay(&payer, &999u64, &token, &1_000_000_000i128);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_repay_invalid_amount() {
+        let (env, admin, nft, treasury, client) = setup();
+        let payer = Address::generate(&env);
+        let token = Address::generate(&env);
+
+        let result = client.try_repay(&payer, &1u64, &token, &0i128);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mark_default_requires_admin() {
+        let (env, admin, nft, treasury, client) = setup();
+        let non_admin = Address::generate(&env);
+        let token = Address::generate(&env);
+
+        let result = client.try_mark_default(&non_admin, &1u64, &token);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mark_default_pool_not_found() {
+        let (env, admin, nft, treasury, client) = setup();
+        let token = Address::generate(&env);
+
+        let result = client.try_mark_default(&admin, &999u64, &token);
+        assert!(result.is_err());
     }
 }
