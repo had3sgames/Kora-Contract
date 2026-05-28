@@ -1,7 +1,7 @@
 use soroban_sdk::{symbol_short, Address, Env, Symbol};
 
-fn emit(env: &Env, name: Symbol, data: impl soroban_sdk::IntoVal<Env, soroban_sdk::Val>) {
-    env.events().publish((name,), data);
+fn emit(env: &Env, topic: Symbol, data: impl soroban_sdk::IntoVal<Env, soroban_sdk::Val>) {
+    env.events().publish((topic,), data);
 }
 
 // ── Invoice Events ──────────────────────────────────────────────────────────
@@ -58,8 +58,6 @@ pub fn yield_distributed(env: &Env, invoice_id: u64, investor: &Address, yield_a
 
 // ── Marketplace Events ──────────────────────────────────────────────────────
 
-// ── Marketplace Events ────────────────────────────────────────────────────────
-
 pub fn listing_cancelled(env: &Env, invoice_id: u64, seller: &Address) {
     emit(env, symbol_short!("LST_CXL"), (invoice_id, seller.clone(), env.ledger().timestamp()));
 }
@@ -92,6 +90,12 @@ pub fn fee_withdrawn(env: &Env, token: &Address, amount: i128) {
     emit(env, symbol_short!("FEE_WTH"), (token.clone(), amount));
 }
 
-pub fn admin_transferred(env: &Env, new_admin: &Address) {
-    emit(env, symbol_short!("ADM_TRF"), new_admin.clone());
+pub fn role_granted(env: &Env, target: &Address, by: &Address) {
+    emit(env, symbol_short!("ROLE_GRT"), (target.clone(), by.clone()));
+}
+
+pub fn role_revoked(env: &Env, target: &Address, by: &Address) {
+    emit(env, symbol_short!("ROLE_RVK"), (target.clone(), by.clone()));
+}
+    emit(env, symbol_short!("ADM_TRF"), (old_admin.clone(), new_admin.clone(), env.ledger().timestamp()));
 }
