@@ -95,3 +95,29 @@ pub fn fee_withdrawn(env: &Env, token: &Address, amount: i128) {
 pub fn admin_transferred(env: &Env, new_admin: &Address) {
     emit(env, symbol_short!("ADM_TRF"), new_admin.clone());
 }
+
+// ── Risk Registry Events ──────────────────────────────────────────────────────
+
+pub fn verifier_added(env: &Env, admin: &Address, verifier: &Address) {
+    emit(env, symbol_short!("VRF_ADD"), (admin.clone(), verifier.clone()));
+}
+
+pub fn verifier_removed(env: &Env, admin: &Address, verifier: &Address) {
+    emit(env, symbol_short!("VRF_REM"), (admin.clone(), verifier.clone()));
+}
+
+pub fn sme_registered(env: &Env, verifier: &Address, sme: &Address, risk_score: u32) {
+    emit(env, symbol_short!("SME_REG"), (verifier.clone(), sme.clone(), risk_score));
+}
+
+pub fn sme_score_updated(env: &Env, verifier: &Address, sme: &Address, new_score: u32) {
+    emit(env, symbol_short!("SME_UPD"), (verifier.clone(), sme.clone(), new_score));
+}
+
+pub fn sme_default_recorded(env: &Env, admin: &Address, sme: &Address, total_defaults: u32) {
+    emit(env, symbol_short!("SME_DFT"), (admin.clone(), sme.clone(), total_defaults));
+}
+
+pub fn debtor_score_set(env: &Env, verifier: &Address, score: u32) {
+    emit(env, symbol_short!("DBT_SCR"), (verifier.clone(), score));
+}
