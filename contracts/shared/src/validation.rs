@@ -1,6 +1,9 @@
 use soroban_sdk::{Bytes, Env, String};
 use crate::errors::KoraError;
 
+// ── Amount guards ─────────────────────────────────────────────────────────────
+
+/// Reject zero or negative amounts.
 pub fn require_non_zero_amount(amount: i128) -> Result<(), KoraError> {
     if amount <= 0 {
         return Err(KoraError::InvalidAmount);
@@ -8,6 +11,7 @@ pub fn require_non_zero_amount(amount: i128) -> Result<(), KoraError> {
     Ok(())
 }
 
+/// Reject strictly negative amounts (zero is allowed).
 pub fn require_positive_amount(amount: i128) -> Result<(), KoraError> {
     if amount < 0 {
         return Err(KoraError::InvalidAmount);
@@ -15,6 +19,18 @@ pub fn require_positive_amount(amount: i128) -> Result<(), KoraError> {
     Ok(())
 }
 
+/// Reject amounts outside [0, max].
+pub fn require_amount_within_bounds(amount: i128, max: i128) -> Result<(), KoraError> {
+    if amount < 0 || amount > max {
+        return Err(KoraError::InvalidAmount);
+    }
+    Ok(())
+}
+
+// ── Timestamp guards ──────────────────────────────────────────────────────────
+
+/// Reject timestamps that are not strictly in the future relative to the
+/// current ledger time. Equal timestamps are also rejected.
 pub fn require_future_timestamp(env: &Env, ts: u64) -> Result<(), KoraError> {
     if ts <= env.ledger().timestamp() {
         return Err(KoraError::InvalidDueDate);
@@ -22,12 +38,25 @@ pub fn require_future_timestamp(env: &Env, ts: u64) -> Result<(), KoraError> {
     Ok(())
 }
 
+// ── Risk / fee guards ─────────────────────────────────────────────────────────
+
+/// Reject risk scores above 100.
 pub fn require_valid_risk_score(score: u32) -> Result<(), KoraError> {
     if score > 100 {
         return Err(KoraError::InvalidRiskScore);
     }
     Ok(())
 }
+
+/// Reject fee rates above 10 000 bps (100 %).
+pub fn require_valid_fee_bps(bps: u32) -> Result<(), KoraError> {
+    if bps > 10_000 {
+        return Err(KoraError::InvalidFeeRate);
+    }
+    Ok(())
+}
+
+// ── String / bytes guards ─────────────────────────────────────────────────────
 
 pub fn require_non_empty_string(s: &String) -> Result<(), KoraError> {
     if s.len() == 0 {
@@ -43,37 +72,39 @@ pub fn require_non_empty_bytes(b: &Bytes) -> Result<(), KoraError> {
     Ok(())
 }
 
-pub fn require_valid_fee_bps(bps: u32) -> Result<(), KoraError> {
-    if bps > 10_000 {
-        return Err(KoraError::InvalidFeeRate);
-    }
-    Ok(())
-}
+// ── Safe arithmetic ───────────────────────────────────────────────────────────
 
-pub fn require_amount_within_bounds(amount: i128, max: i128) -> Result<(), KoraError> {
-    if amount > max || amount < 0 {
+/// Safe basis-point multiplication: `(amount * bps) / 10_000`.
+///
+/// Returns `InvalidAmount` if `amount` is negative (a negative fee makes no
+/// sense and would silently produce a negative result otherwise).
+/// Returns `ArithmeticOverflow` if the intermediate multiplication overflows.
+pub fn bps_of(amount: i128, bps: u32) -> Result<i128, KoraError> {
+    if amount < 0 {
         return Err(KoraError::InvalidAmount);
     }
-    Ok(())
-}
-
-/// Safe basis-point multiplication: (amount * bps) / 10_000
-pub fn bps_of(amount: i128, bps: u32) -> Result<i128, KoraError> {
     amount
         .checked_mul(bps as i128)
         .and_then(|v| v.checked_div(10_000))
         .ok_or(KoraError::ArithmeticOverflow)
 }
 
-/// Safe addition with overflow check
+/// Safe addition — returns `ArithmeticOverflow` on overflow.
 pub fn safe_add(a: i128, b: i128) -> Result<i128, KoraError> {
     a.checked_add(b).ok_or(KoraError::ArithmeticOverflow)
 }
 
-/// Safe subtraction with underflow check
+/// Safe subtraction — returns `ArithmeticUnderflow` when `a < b`.
 pub fn safe_sub(a: i128, b: i128) -> Result<i128, KoraError> {
-    a.checked_sub(b).ok_or(KoraError::ArithmeticOverflow)
+    a.checked_sub(b).ok_or(KoraError::ArithmeticUnderflow)
 }
+
+/// Safe multiplication — returns `ArithmeticOverflow` on overflow.
+pub fn safe_mul(a: i128, b: i128) -> Result<i128, KoraError> {
+    a.checked_mul(b).ok_or(KoraError::ArithmeticOverflow)
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -95,10 +126,30 @@ mod tests {
     }
 
     #[test]
+    fn test_require_amount_within_bounds() {
+        assert!(require_amount_within_bounds(-1, 100).is_err());
+        assert!(require_amount_within_bounds(0, 100).is_ok());
+        assert!(require_amount_within_bounds(100, 100).is_ok());
+        assert!(require_amount_within_bounds(101, 100).is_err());
+    }
+
+    #[test]
     fn test_bps_of_safe() {
         assert_eq!(bps_of(10_000, 100).unwrap(), 100);
         assert_eq!(bps_of(1_000_000, 50).unwrap(), 5_000);
         assert!(bps_of(i128::MAX, 10_000).is_err());
+    }
+
+    #[test]
+    fn test_bps_of_negative_amount_rejected() {
+        // Negative amounts must be rejected to prevent silent negative fees
+        assert!(bps_of(-1_000, 50).is_err());
+    }
+
+    #[test]
+    fn test_bps_of_zero_bps() {
+        // Zero bps should always yield zero fee
+        assert_eq!(bps_of(1_000_000, 0).unwrap(), 0);
     }
 
     #[test]
@@ -110,6 +161,28 @@ mod tests {
     #[test]
     fn test_safe_sub() {
         assert_eq!(safe_sub(300, 100).unwrap(), 200);
-        assert!(safe_sub(100, 200).is_err());
+        // Underflow returns ArithmeticUnderflow, not ArithmeticOverflow
+        let err = safe_sub(100, 200).unwrap_err();
+        assert_eq!(err, KoraError::ArithmeticUnderflow);
+    }
+
+    #[test]
+    fn test_safe_mul() {
+        assert_eq!(safe_mul(10, 20).unwrap(), 200);
+        assert!(safe_mul(i128::MAX, 2).is_err());
+    }
+
+    #[test]
+    fn test_require_valid_fee_bps() {
+        assert!(require_valid_fee_bps(0).is_ok());
+        assert!(require_valid_fee_bps(10_000).is_ok());
+        assert!(require_valid_fee_bps(10_001).is_err());
+    }
+
+    #[test]
+    fn test_require_valid_risk_score() {
+        assert!(require_valid_risk_score(0).is_ok());
+        assert!(require_valid_risk_score(100).is_ok());
+        assert!(require_valid_risk_score(101).is_err());
     }
 }

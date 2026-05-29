@@ -91,7 +91,10 @@ pub struct Pool {
     pub late_penalty_bps: u32,
 }
 
-/// Protocol-level configuration
+/// Protocol-level configuration.
+///
+/// Note: pause state is NOT stored here — it is owned exclusively by the
+/// AccessControl contract to avoid split-brain between two sources of truth.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct ProtocolConfig {
@@ -99,7 +102,6 @@ pub struct ProtocolConfig {
     pub late_penalty_bps: u32,  // penalty on late repayment
     pub max_risk_score: u32,    // ceiling for accepted invoices
     pub min_funding_period: u64,
-    pub paused: bool,
 }
 
 /// SME profile in the risk registry
