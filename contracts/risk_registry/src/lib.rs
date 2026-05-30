@@ -612,7 +612,7 @@ mod tests {
         let debtor_hash = Bytes::from_slice(&env, &[0xABu8; 32]);
         client.add_verifier(&admin, &verifier);
         client.set_debtor_score(&verifier, &debtor_hash, &45u32);
-        assert_eq!(client.get_debtor_score(&debtor_hash).unwrap(), 45u32);
+        assert_eq!(client.try_get_debtor_score(&debtor_hash).unwrap(), 45u32);
     }
 
     #[test]
