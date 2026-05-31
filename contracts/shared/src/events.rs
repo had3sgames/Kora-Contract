@@ -1,7 +1,7 @@
 use soroban_sdk::{symbol_short, Address, Env, Symbol};
 
-fn emit(env: &Env, name: Symbol, data: impl soroban_sdk::IntoVal<Env, soroban_sdk::Val>) {
-    env.events().publish((name,), data);
+fn emit(env: &Env, topic: Symbol, data: impl soroban_sdk::IntoVal<Env, soroban_sdk::Val>) {
+    env.events().publish((topic,), data);
 }
 
 // ── Invoice Events ──────────────────────────────────────────────────────────

@@ -39,7 +39,7 @@ pub fn require_non_empty_string(s: &String) -> Result<(), KoraError> {
 
 pub fn require_non_empty_bytes(b: &Bytes) -> Result<(), KoraError> {
     if b.len() == 0 {
-        return Err(KoraError::EmptyString);
+        return Err(KoraError::EmptyBytes);
     }
     Ok(())
 }
@@ -81,7 +81,20 @@ pub fn safe_add(a: i128, b: i128) -> Result<i128, KoraError> {
 
 /// Safe subtraction with underflow check
 pub fn safe_sub(a: i128, b: i128) -> Result<i128, KoraError> {
-    a.checked_sub(b).ok_or(KoraError::ArithmeticOverflow)
+    a.checked_sub(b).ok_or(KoraError::ArithmeticUnderflow)
+}
+
+/// Safe multiplication with overflow check
+pub fn safe_mul(a: i128, b: i128) -> Result<i128, KoraError> {
+    a.checked_mul(b).ok_or(KoraError::ArithmeticOverflow)
+}
+
+/// Safe division, returns error on divide-by-zero
+pub fn safe_div(a: i128, b: i128) -> Result<i128, KoraError> {
+    if b == 0 {
+        return Err(KoraError::InvalidAmount);
+    }
+    a.checked_div(b).ok_or(KoraError::ArithmeticOverflow)
 }
 
 /// Safe multiplication with overflow check
