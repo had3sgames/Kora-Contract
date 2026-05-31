@@ -164,11 +164,6 @@ impl FinancingPoolContract {
             return Err(KoraError::RepaymentAlreadyMade);
         }
 
-        // Validate amount
-        if amount <= 0 {
-            return Err(KoraError::InvalidAmount);
-        }
-
         let token_client = token::Client::new(env, token);
         token_client.transfer(payer, &env.current_contract_address(), &amount);
 
@@ -396,6 +391,98 @@ mod tests {
         client.record_position(&admin, &1u64, &investor, &contributed, &total_pool);
         let positions = client.get_positions(&1u64);
         assert_eq!(positions.len(), 1);
+    }
+
+    #[test]
+    fn test_record_position_share_calculation() {
+        let (env, admin, nft, treasury, client) = setup();
+        let investor = Address::generate(&env);
+        let contributed = 5_000_000_000i128;
+        let total_pool = 10_000_000_000i128;
+
+        client.record_position(&admin, &1u64, &investor, &contributed, &total_pool);
+        let positions = client.get_positions(&1u64);
+        assert_eq!(positions.len(), 1);
+        // 5_000_000_000 / 10_000_000_000 * 10_000 = 5000 bps (50%)
+        assert_eq!(positions.get(0).unwrap().share_bps, 5000u32);
+    }
+
+    #[test]
+    fn test_record_multiple_positions() {
+        let (env, admin, nft, treasury, client) = setup();
+        let investor1 = Address::generate(&env);
+        let investor2 = Address::generate(&env);
+        let total_pool = 10_000_000_000i128;
+
+        client.record_position(&admin, &1u64, &investor1, &3_000_000_000i128, &total_pool);
+        client.record_position(&admin, &1u64, &investor2, &7_000_000_000i128, &total_pool);
+
+        let positions = client.get_positions(&1u64);
+        assert_eq!(positions.len(), 2);
+    }
+
+    #[test]
+    fn test_position_attributes() {
+        let (env, admin, nft, treasury, client) = setup();
+        let investor = Address::generate(&env);
+        let contributed = 2_500_000_000i128;
+        let total_pool = 10_000_000_000i128;
+        let invoice_id = 42u64;
+
+        client.record_position(&admin, &invoice_id, &investor, &contributed, &total_pool);
+        let positions = client.get_positions(&invoice_id);
+        assert_eq!(positions.len(), 1);
+
+        let pos = positions.get(0).unwrap();
+        assert_eq!(pos.investor, investor);
+        assert_eq!(pos.invoice_id, invoice_id);
+        assert_eq!(pos.contributed, contributed);
+        // 2_500_000_000 / 10_000_000_000 * 10_000 = 2500 bps (25%)
+        assert_eq!(pos.share_bps, 2500u32);
+        assert_eq!(pos.yield_claimed, 0i128);
+    }
+
+    #[test]
+    fn test_share_bps_boundary_full_pool() {
+        let (env, admin, nft, treasury, client) = setup();
+        let investor = Address::generate(&env);
+        let total_pool = 10_000_000_000i128;
+
+        // Investor contributes 100% of the pool
+        client.record_position(&admin, &1u64, &investor, &total_pool, &total_pool);
+        let positions = client.get_positions(&1u64);
+        assert_eq!(positions.get(0).unwrap().share_bps, 10_000u32);
+    }
+
+    #[test]
+    fn test_share_bps_boundary_minimal() {
+        let (env, admin, nft, treasury, client) = setup();
+        let investor = Address::generate(&env);
+        let total_pool = 10_000_000_000i128;
+
+        // Minimal contribution — rounds down to 0 bps
+        client.record_position(&admin, &1u64, &investor, &1i128, &total_pool);
+        let positions = client.get_positions(&1u64);
+        assert_eq!(positions.get(0).unwrap().share_bps, 0u32);
+    }
+
+    #[test]
+    fn test_zero_contribution() {
+        let (env, admin, nft, treasury, client) = setup();
+        let investor = Address::generate(&env);
+
+        let result = client.try_record_position(&admin, &1u64, &investor, &0i128, &10_000_000_000i128);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_arithmetic_overflow_protection() {
+        let (env, admin, nft, treasury, client) = setup();
+        let investor = Address::generate(&env);
+
+        // contributed > total_pool should fail
+        let result = client.try_record_position(&admin, &1u64, &investor, &i128::MAX, &1i128);
+        assert!(result.is_err());
     }
 
     #[test]

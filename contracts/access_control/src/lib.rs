@@ -530,10 +530,9 @@ mod tests {
         assert_eq!(client.get_role(&unknown), Role::None);
     }
 }
-// ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-mod tests {
+mod tests_extended {
     use super::*;
     use kora_shared::errors::KoraError;
     use soroban_sdk::{
