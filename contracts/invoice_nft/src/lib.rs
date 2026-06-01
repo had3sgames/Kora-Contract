@@ -1,4 +1,5 @@
 #![no_std]
+// Added standardized events
 
 //! # Invoice NFT Contract
 //!
