@@ -3,24 +3,26 @@
 use kora_shared::{
     errors::KoraError,
     events,
+    reentrancy::ReentrancyGuard,
     types::Listing,
-    validation::{bps_of, require_non_zero_amount, require_valid_fee_bps},
+    validation::{bps_of, require_non_zero_amount, require_valid_fee_bps, safe_add, safe_sub},
 };
 use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env};
 
-// ── Storage Keys ─────────────────────────────────────────────────────────────
+s (~30 days in ledgers at ~5s/ledger) ─────────────────────────
+const PERSISTENT_TTL_THRESHOLD: u32 = 518_400;
+const PERSISTENT_TTL_BUMP: u32 = 518_400;
+
+// ── Stora───────────────────────────────────────────────
 
 #[contracttype]
 pub enum DataKey {
-    Listing(u64),
     Config,
-    Admin,
-    InvoiceNft,
-    FinancingPool,
-    Treasury,
-    FeeBps,
+    Listing(u64),
     WhitelistedToken(Address),
 }
+
+// ── Config st─────────────────────────────────────────────────────────────
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -32,9 +34,9 @@ pub struct MarketplaceConfig {
     pub fee_bps: u32,
 }
 
-// ── Contract ──────────────────────────────────────────────────────────────────
+// ── Contr─────────────────────────────
 
-#[contract]
+ract]
 pub struct MarketplaceContract;
 
 #[contractimpl]
@@ -49,8 +51,8 @@ impl MarketplaceContract {
         financing_pool: Address,
         treasury: Address,
         fee_bps: u32,
-    ) -> Result<(), KoraError> {
-        if env.storage().instance().has(&DataKey::Config) {
+    ) -> 
+        if env.storage().instance().has(::Config) {
             return Err(KoraError::AlreadyInitialized);
         }
         require_valid_fee_bps(fee_bps)?;
@@ -66,20 +68,80 @@ impl MarketplaceContract {
         Ok(())
     }
 
-    /// Update the marketplace fee. Admin only.
-    pub fn update_fee_bps(env: Env, admin: Address, fee_bps: u32) -> Result<(), KoraError> {
+    /pdate the marketplace fee. Admin only.
+ fee_bps: u32) -> Result<(), KoraError> {
         admin.require_auth();
-        Self::require_admin(&env, &admin)?;
+        let mut config = Self::load_config(&env)?;
+        if config.admin != admin {
+            return Err(KoraError::NotAdmin);
+        }
         require_valid_fee_bps(fee_bps)?;
-        env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
+
+        let old_bps = config.fee_bps;
+        config.fee_bps = fee_bps;
+        env.storage().instance().set(&DataKey::Config, &config);
+        events::fee_rate_updated(&env, &admin, old_bps, fee_bps);
         Ok(())
     }
 
-    pub fn get_fee_bps(env: Env) -> u32 {
-        env.storage().instance().get(&DataKey::FeeBps).unwrap_or(50)
+    /// Returns the current fein basis points.
+    pub fn get_fee_bps(env: Env) -> Result<u32, KoraError> {
+        Ok(Self::load_config(&env)?.fee_bps)
+    }
+
+    /// Returns the full config struct.
+    pub fn get_config(env: Env) -> Result<MarketplaceConfig, KoraError> {
+        Self::load_config(&env)
+    }
+
+    /// Whitelist a stablecoin token for use in listings. Admin only.
+    pub fn whitelist_token(env: Env, admin: Address, token: Address) -> Result<(), KoraError> {
+        aauth();
+
+        if config.admin != admin {
+            return Err(KoraError::NotAdmin);
+        }
+        env.storage()
+            .persistent()
+            .set(&DataKey::WhitelistedToken(token.clone()), &true);
+        Self::bump_persistent(&env, &DataKey::WhitelistedToken(token.clone()));
+        events::token_whitelisted(&env, &token);
+        Ok(())
+    }
+
+    /// Remove a token from the whitelist. Admin only.
+    pub fn remove_token_whitelist(
+        env: Env,
+        admin: Address,
+        token: Address,
+    ) -> Result<(), KoraError> {
+        admin.require_auth();
+        let coad_config(&env)?;
+        if config.admin != admin {
+ror::NotAdmin);
+        }
+        if !env
+            .storage()
+            .persistent()
+            .get::<_, bool>(&DataKey::WhitelistedToken(token.clone()))
+            .unwrap_or(false)
+        {
+            return Err(KoraError::TokenNotWhitelisted);
+        }
+        env.storage()
+            .persistent()
+            .remove(&DataKey::WhitelistedToken(token));
+        Ok(())
     }
 
     /// SME lists an invoice NFT for financing.
+    ///
+    /// Invariants enforced:
+    /// -face_value` > 0
+    /// - `asking_price` < `face_value` (discount must exist)
+    /// - `funding_deadline` is strictly in the future
+    /// - `token` is whitelisted
+    /// - No existing active listing for this `invoice_id`
     pub fn list_invoice(
         env: Env,
         seller: Address,
@@ -90,12 +152,14 @@ impl MarketplaceContract {
         funding_deadline: u64,
     ) -> Result<(), KoraError> {
         seller.require_auth();
+
+        // ── Input validation ──────────────────────────────────────────────────
         require_non_zero_amount(asking_price)?;
-        require_non_zero_amount(face_value)?;
+alue)?;
         kora_shared::validation::require_future_timestamp(&env, funding_deadline)?;
 
         if asking_price >= face_value {
-            return Err(KoraError::InvalidAmount); // discount must exist
+            return Err(KoraError::InvalidAmount);
         }
         Self::require_whitelisted_token(&env, &token)?;
 
@@ -107,12 +171,17 @@ impl MarketplaceContract {
             return Err(KoraError::InvoiceAlreadyExists);
         }
 
+        // ── Reentrancy guard ──────────────────────────────────────────────────
+        let _guard = Reent:new(&env)?;
+
         let config = Self::load_config(&env)?;
 
-        // Notify Invoice NFT contract to transition status
-        let nft_client = kora_invoice_nft::InvoiceNftContractClient::new(&env, &config.invoice_nft);
+        // ── Cross-contract: transition NFT to Listed ──────────────────────────
+        let nft_client =
+            kora_invoice_nft::InvoiceNftContractClient::new(&env, &config.invoice_nft);
         nft_client.set_listed(&env.current_contract_address(), &invoice_id);
 
+        // ── Effects ───────────────────────────────────────────────────────────
         let listing = Listing {
             invoice_id,
             seller: seller.clone(),
@@ -141,8 +210,11 @@ impl MarketplaceContract {
         amount: i128,
     ) -> Result<(), KoraError> {
         investor.require_auth();
-        require_non_zero_amount(amount)?;
 
+        // ── Input validation ──────────────────────────────────────────────────
+_amount(amount)?;
+
+        // ── Load and validate listing ─────────────────────────────────────────
         let mut listing: Listing = env
             .storage()
             .persistent()
@@ -156,13 +228,9 @@ impl MarketplaceContract {
             return Err(KoraError::FundingDeadlinePassed);
         }
 
-        let remaining = listing
-            .asking_price
-            .checked_sub(listing.funded_amount)
-            .ok_or(KoraError::ArithmeticOverflow)?;
-
+        let remaining = safe_sub(listing.askinnded_amount)?;
         if amount > remaining {
-            return Err(KoraError::ExceedsFundingTarget);
+turn Err(KoraError::ExceedsFundingTarget);
         }
 
         // Collect marketplace fee from investor (on top of contribution)
@@ -173,22 +241,19 @@ impl MarketplaceContract {
             .ok_or(KoraError::ArithmeticOverflow)?;
 
         let token_client = token::Client::new(&env, &listing.token);
-        let treasury: Address = env.storage().instance().get(&DataKey::Treasury).unwrap();
-        let pool_contract: Address = env.storage().instance().get(&DataKey::FinancingPool).unwrap();
 
-        // Transfer fee to treasury
+        // ── Interact────────────────
+        // Transfer fee to treasury (if non-zero)
         if fee > 0 {
-            token_client.transfer(&investor, &treasury, &fee);
+            token_client.transfer(&investor, &config.treasury, &fee);
         }
-        // Transfer net to financing pool
-        token_client.transfer(&investor, &pool_contract, &net);
+        // Transfer full contribution amount to financing pool
+        token_client.transfer(&investor, &config.financing_pool, &amount);
 
-        listing.funded_amount = listing
-            .funded_amount
-            .checked_add(amount)
-            .ok_or(KoraError::ArithmeticOverflow)?;
+        // ── Effects: update state after transfers ─────────────────────────────
+        listing.funded_amount = safe_add(listing.funded_amount, amount)?;
 
-        let fully_funded = listing.funded_amount >= listing.asking_price;
+        let fully_funded = listing.funded_amoing.asking_price;
         if fully_funded {
             listing.is_active = false;
         }
@@ -201,10 +266,12 @@ impl MarketplaceContract {
             events::fee_collected(&env, invoice_id, fee, &listing.token);
         }
 
-        // If fully funded, notify pool to release funds to SME
+        // ── Cross-contract: notify pool to release funds to SME ───────────────
         if fully_funded {
-            let pool_client =
-                kora_financing_pool::FinancingPoolContractClient::new(&env, &pool_contract);
+            let pool_client = kora_financing_potClient::new(
+                &env,
+                &confipool,
+            );
             pool_client.release_funds(&env.current_contract_address(), &invoice_id);
         }
 
@@ -216,6 +283,7 @@ impl MarketplaceContract {
     /// Errors: ListingNotFound, ListingAlreadyCancelled, Unauthorized if caller is neither seller nor admin.
     pub fn cancel_listing(env: Env, caller: Address, invoice_id: u64) -> Result<(), KoraError> {
         caller.require_auth();
+
         let mut listing: Listing = env
             .storage()
             .persistent()
@@ -239,14 +307,14 @@ impl MarketplaceContract {
         Ok(())
     }
 
-    /// Whitelist a stablecoin token for use in listings. Admin only.
-    pub fn whitelist_token(env: Env, admin: Address, token: Address) -> Result<(), KoraError> {
-        admin.require_auth();
-        Self::require_admin(&env, &admin)?;
+        // ── Effects ───────────────────────────────────────────────────────────
+        listing.is_active = false;
         env.storage()
             .persistent()
-            .set(&DataKey::WhitelistedToken(token.clone()), &true);
-        events::token_whitelisted(&env, &token);
+            .set(&DataKey::Listing(invoice_id), &listing);
+        Self::bump_persistent(&env, &DataKey::Listing(invoice_id));
+
+        events::listing_cancelled(&env, invoice_id, &listing.seller);
         Ok(())
     }
 
@@ -259,6 +327,7 @@ impl MarketplaceContract {
             .ok_or(KoraError::ListingNotFound)
     }
 
+    /// Returns whether a token is whitelisted.
     pub fn is_token_whitelisted(env: Env, token: Address) -> bool {
         env.storage()
             .persistent()
@@ -266,7 +335,14 @@ impl MarketplaceContract {
             .unwrap_or(false)
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    /rivate helpers ───────────────────────────────────────────────────────
+
+    fn load_config(env: &Env) -> Result<MarketplaceConfig, KoraError> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Config)
+            .ok_or(KoraError::NotInitialized)
+    }
 
     fn require_whitelisted_token(env: &Env, token: &Address) -> Result<(), KoraError> {
         let ok: bool = env
