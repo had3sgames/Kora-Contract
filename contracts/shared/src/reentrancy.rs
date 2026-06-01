@@ -18,16 +18,24 @@ pub enum GuardKey {
 ///
 /// # Usage
 /// ```rust,ignore
-/// let _guard = ReentrancyGuard::new(&env)?;
-/// // ... protected logic ...
-/// // lock is released automatically when _guard goes out of scope
+/// pub fn my_fn(env: Env) -> Result<(), KoraError> {
+///     let _guard = ReentrancyGuard::new(&env)?;
+///     // ... protected logic ...
+///     Ok(())
+/// } // lock released here automatically
 /// ```
 pub struct ReentrancyGuard<'a> {
     env: &'a Env,
 }
 
+impl<'a> core::fmt::Debug for ReentrancyGuard<'a> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ReentrancyGuard").finish_non_exhaustive()
+    }
+}
+
 impl<'a> ReentrancyGuard<'a> {
-    /// Acquire the reentrancy lock. Returns `KoraError::Reentrancy` if already held.
+    /// Acquire the lock. Returns `KoraError::Reentrancy` if already locked.
     pub fn new(env: &'a Env) -> Result<Self, KoraError> {
         acquire_guard(env)?;
         Ok(Self { env })
@@ -65,38 +73,6 @@ pub fn release_guard(env: &Env) {
 /// Returns `true` if the reentrancy lock is currently held.
 pub fn is_locked(env: &Env) -> bool {
     env.storage().instance().has(&GuardKey::Lock)
-}
-
-// ── RAII guard ────────────────────────────────────────────────────────────────
-
-/// RAII reentrancy guard. Acquires the lock on construction and releases it
-/// automatically when dropped, ensuring the lock is always released even on
-/// early returns or panics.
-///
-/// # Usage
-/// ```ignore
-/// pub fn my_fn(env: Env) -> Result<(), KoraError> {
-///     let _guard = ReentrancyGuard::new(&env)?;
-///     // ... protected logic ...
-///     Ok(())
-/// } // lock released here automatically
-/// ```
-pub struct ReentrancyGuard<'a> {
-    env: &'a Env,
-}
-
-impl<'a> ReentrancyGuard<'a> {
-    /// Acquire the lock. Returns `KoraError::Reentrancy` if already locked.
-    pub fn new(env: &'a Env) -> Result<Self, KoraError> {
-        acquire_guard(env)?;
-        Ok(Self { env })
-    }
-}
-
-impl<'a> Drop for ReentrancyGuard<'a> {
-    fn drop(&mut self) {
-        release_guard(self.env);
-    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
