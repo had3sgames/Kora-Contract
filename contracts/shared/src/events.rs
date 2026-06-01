@@ -101,15 +101,15 @@ pub fn listing_expired(env: &Env, invoice_id: u64, seller: &Address) {
 // ── Fee Events ────────────────────────────────────────────────────────────────
 
 /// Standardized marketplace event: fee collected from funding.
-/// Schema: topic, actor (investor), listing (invoice_id), amount (fee_amount), ledger_seq (timestamp)
-pub fn fee_collected(env: &Env, invoice_id: u64, investor: &Address, fee_amount: i128) {
+/// Schema: topic, listing (invoice_id), amount (fee_amount), token, ledger_seq (timestamp)
+pub fn fee_collected(env: &Env, invoice_id: u64, fee_amount: i128, token: &Address) {
     emit(
         env,
         symbol_short!("FEE_COL"),
         (
-            investor.clone(),
             invoice_id,
             fee_amount,
+            token.clone(),
             env.ledger().timestamp(),
         ),
     );
@@ -141,7 +141,7 @@ pub fn fee_rate_updated(env: &Env, by: &Address, old_bps: u32, new_bps: u32) {
 pub fn treasury_initialized(env: &Env, admin: &Address, fee_bps: u32) {
     emit(
         env,
-        symbol_short!("TRES_INT"),
+        symbol_short!("TRES_INI"),
         (admin.clone(), fee_bps),
     );
 }
@@ -261,11 +261,4 @@ pub fn debtor_score_set(env: &Env, verifier: &Address, debtor_hash: &Bytes, scor
     );
 }
 
-// AUDIT FIX: Added missing event for invoice count increment
-pub fn sme_invoice_counted(env: &Env, sme: &Address, total_invoices: u32) {
-    emit(
-        env,
-        symbol_short!("SME_CNT"),
-        (sme.clone(), total_invoices),
-    );
-}
+// AUDIT FIX: Removed duplicate sme_invoice_counted — use sme_invoice_count_incremented instead.

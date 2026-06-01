@@ -56,8 +56,17 @@ pub fn require_valid_fee_bps(bps: u32) -> Result<(), KoraError> {
     Ok(())
 }
 
+/// Validates that `bps` is within [min_bps, max_bps] inclusive.
+pub fn require_valid_bps_range(bps: u32, min_bps: u32, max_bps: u32) -> Result<(), KoraError> {
+    if bps < min_bps || bps > max_bps {
+        return Err(KoraError::InvalidFeeRate);
+    }
+    Ok(())
+}
+
 // ── String / bytes guards ─────────────────────────────────────────────────────
 
+/// Reject empty Soroban strings.
 pub fn require_non_empty_string(s: &String) -> Result<(), KoraError> {
     if s.len() == 0 {
         return Err(KoraError::EmptyString);
@@ -65,7 +74,7 @@ pub fn require_non_empty_string(s: &String) -> Result<(), KoraError> {
     Ok(())
 }
 
-/// OPT: Mark for inlining - bytes length check takes reference (no allocation)
+/// Reject empty byte slices. Returns `EmptyBytes` (distinct from `EmptyString`).
 #[inline]
 pub fn require_non_empty_bytes(b: &Bytes) -> Result<(), KoraError> {
     if b.len() == 0 {
@@ -76,19 +85,11 @@ pub fn require_non_empty_bytes(b: &Bytes) -> Result<(), KoraError> {
 
 // ── Safe arithmetic ───────────────────────────────────────────────────────────
 
-/// Validates that `bps` is within [min_bps, max_bps] inclusive.
-pub fn require_valid_bps_range(bps: u32, min_bps: u32, max_bps: u32) -> Result<(), KoraError> {
-    if bps < min_bps || bps > max_bps {
-        return Err(KoraError::InvalidFeeRate);
-    }
-    Ok(())
-}
-
-/// OPT: Consolidated range check in single comparison (0 <= amount <= max)
+/// Compute `amount * bps / 10_000` with overflow protection.
+/// Rejects negative amounts to prevent silent negative fees.
 #[inline]
-pub fn require_amount_within_bounds(amount: i128, max: i128) -> Result<(), KoraError> {
-    // OPT: Early exit for negative amounts saves comparison if amount >= 0
-    if amount < 0 || amount > max {
+pub fn bps_of(amount: i128, bps: u32) -> Result<i128, KoraError> {
+    if amount < 0 {
         return Err(KoraError::InvalidAmount);
     }
     amount
@@ -102,7 +103,7 @@ pub fn safe_add(a: i128, b: i128) -> Result<i128, KoraError> {
     a.checked_add(b).ok_or(KoraError::ArithmeticOverflow)
 }
 
-/// Safe subtraction — returns `ArithmeticUnderflow` when `a < b`.
+/// Safe subtraction — returns `ArithmeticUnderflow` when result would underflow.
 pub fn safe_sub(a: i128, b: i128) -> Result<i128, KoraError> {
     a.checked_sub(b).ok_or(KoraError::ArithmeticUnderflow)
 }
@@ -112,10 +113,10 @@ pub fn safe_mul(a: i128, b: i128) -> Result<i128, KoraError> {
     a.checked_mul(b).ok_or(KoraError::ArithmeticOverflow)
 }
 
-/// Safe division — returns `ArithmeticOverflow` on divide-by-zero or overflow.
+/// Safe division — returns `InvalidAmount` on divide-by-zero, `ArithmeticOverflow` otherwise.
 pub fn safe_div(a: i128, b: i128) -> Result<i128, KoraError> {
     if b == 0 {
-        return Err(KoraError::ArithmeticOverflow);
+        return Err(KoraError::InvalidAmount);
     }
     a.checked_div(b).ok_or(KoraError::ArithmeticOverflow)
 }
@@ -168,6 +169,22 @@ mod tests {
     }
 
     #[test]
+    fn test_require_valid_fee_bps() {
+        assert!(require_valid_fee_bps(0).is_ok());
+        assert!(require_valid_fee_bps(50).is_ok());
+        assert!(require_valid_fee_bps(10_000).is_ok());
+        assert!(require_valid_fee_bps(10_001).is_err());
+    }
+
+    #[test]
+    fn test_require_valid_bps_range() {
+        assert!(require_valid_bps_range(50, 0, 1000).is_ok());
+        assert!(require_valid_bps_range(0, 0, 1000).is_ok());
+        assert!(require_valid_bps_range(1000, 0, 1000).is_ok());
+        assert!(require_valid_bps_range(1001, 0, 1000).is_err());
+    }
+
+    #[test]
     fn test_require_non_empty_string() {
         let env = Env::default();
         let empty_str = SorobanString::from_str(&env, "");
@@ -178,7 +195,6 @@ mod tests {
     }
 
     #[test]
-    // AUDIT FIX: Test for new EmptyBytes error variant
     fn test_require_non_empty_bytes() {
         let env = Env::default();
         let empty_bytes = Bytes::from_slice(&env, &[]);
@@ -193,23 +209,6 @@ mod tests {
         );
 
         assert!(require_non_empty_bytes(&non_empty_bytes).is_ok());
-    }
-
-    #[test]
-    fn test_require_valid_fee_bps() {
-        assert!(require_valid_fee_bps(0).is_ok());
-        assert!(require_valid_fee_bps(50).is_ok());
-        assert!(require_valid_fee_bps(10_000).is_ok());
-        assert!(require_valid_fee_bps(10_001).is_err());
-    }
-
-    #[test]
-    fn test_require_amount_within_bounds() {
-        assert!(require_amount_within_bounds(0, 1_000).is_ok());
-        assert!(require_amount_within_bounds(500, 1_000).is_ok());
-        assert!(require_amount_within_bounds(1_000, 1_000).is_ok());
-        assert!(require_amount_within_bounds(1_001, 1_000).is_err());
-        assert!(require_amount_within_bounds(-1, 1_000).is_err());
     }
 
     #[test]
@@ -240,7 +239,7 @@ mod tests {
     #[test]
     fn test_safe_sub() {
         assert_eq!(safe_sub(300, 100).unwrap(), 200);
-        // Underflow returns ArithmeticUnderflow, not ArithmeticOverflow
+        // Underflow returns ArithmeticUnderflow
         let err = safe_sub(100, 200).unwrap_err();
         assert_eq!(err, KoraError::ArithmeticUnderflow);
     }
@@ -255,27 +254,5 @@ mod tests {
     fn test_safe_div() {
         assert_eq!(safe_div(200, 4).unwrap(), 50);
         assert!(safe_div(100, 0).is_err());
-    }
-
-    #[test]
-    fn test_require_valid_fee_bps() {
-        assert!(require_valid_fee_bps(0).is_ok());
-        assert!(require_valid_fee_bps(10_000).is_ok());
-        assert!(require_valid_fee_bps(10_001).is_err());
-    }
-
-    #[test]
-    fn test_require_valid_risk_score() {
-        assert!(require_valid_risk_score(0).is_ok());
-        assert!(require_valid_risk_score(100).is_ok());
-        assert!(require_valid_risk_score(101).is_err());
-    }
-
-    #[test]
-    fn test_require_valid_bps_range() {
-        assert!(require_valid_bps_range(50, 0, 1000).is_ok());
-        assert!(require_valid_bps_range(0, 0, 1000).is_ok());
-        assert!(require_valid_bps_range(1000, 0, 1000).is_ok());
-        assert!(require_valid_bps_range(1001, 0, 1000).is_err());
     }
 }
