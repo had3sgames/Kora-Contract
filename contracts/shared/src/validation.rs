@@ -1,5 +1,5 @@
-use soroban_sdk::{Bytes, Env, String};
 use crate::errors::KoraError;
+use soroban_sdk::{Bytes, Env, String};
 
 // ── Amount guards ─────────────────────────────────────────────────────────────
 
@@ -56,8 +56,17 @@ pub fn require_valid_fee_bps(bps: u32) -> Result<(), KoraError> {
     Ok(())
 }
 
+/// Validates that `bps` is within [min_bps, max_bps] inclusive.
+pub fn require_valid_bps_range(bps: u32, min_bps: u32, max_bps: u32) -> Result<(), KoraError> {
+    if bps < min_bps || bps > max_bps {
+        return Err(KoraError::InvalidFeeRate);
+    }
+    Ok(())
+}
+
 // ── String / bytes guards ─────────────────────────────────────────────────────
 
+/// Reject empty Soroban strings.
 pub fn require_non_empty_string(s: &String) -> Result<(), KoraError> {
     if s.len() == 0 {
         return Err(KoraError::EmptyString);
@@ -65,6 +74,8 @@ pub fn require_non_empty_string(s: &String) -> Result<(), KoraError> {
     Ok(())
 }
 
+/// Reject empty byte slices. Returns `EmptyBytes` (distinct from `EmptyString`).
+#[inline]
 pub fn require_non_empty_bytes(b: &Bytes) -> Result<(), KoraError> {
     if b.len() == 0 {
         return Err(KoraError::EmptyBytes);
@@ -74,16 +85,11 @@ pub fn require_non_empty_bytes(b: &Bytes) -> Result<(), KoraError> {
 
 // ── Safe arithmetic ───────────────────────────────────────────────────────────
 
-/// Validates that `bps` is within [min_bps, max_bps] inclusive.
-pub fn require_valid_bps_range(bps: u32, min_bps: u32, max_bps: u32) -> Result<(), KoraError> {
-    if bps < min_bps || bps > max_bps {
-        return Err(KoraError::InvalidFeeRate);
-    }
-    Ok(())
-}
-
-pub fn require_amount_within_bounds(amount: i128, max: i128) -> Result<(), KoraError> {
-    if amount > max || amount < 0 {
+/// Compute `amount * bps / 10_000` with overflow protection.
+/// Rejects negative amounts to prevent silent negative fees.
+#[inline]
+pub fn bps_of(amount: i128, bps: u32) -> Result<i128, KoraError> {
+    if amount < 0 {
         return Err(KoraError::InvalidAmount);
     }
     amount
@@ -97,35 +103,9 @@ pub fn safe_add(a: i128, b: i128) -> Result<i128, KoraError> {
     a.checked_add(b).ok_or(KoraError::ArithmeticOverflow)
 }
 
-/// Safe subtraction — returns `ArithmeticUnderflow` when `a < b`.
+/// Safe subtraction — returns `ArithmeticUnderflow` when result would underflow.
 pub fn safe_sub(a: i128, b: i128) -> Result<i128, KoraError> {
     a.checked_sub(b).ok_or(KoraError::ArithmeticUnderflow)
-}
-
-/// Safe multiplication with overflow check
-pub fn safe_mul(a: i128, b: i128) -> Result<i128, KoraError> {
-    a.checked_mul(b).ok_or(KoraError::ArithmeticOverflow)
-}
-
-/// Safe division, returns error on divide-by-zero
-pub fn safe_div(a: i128, b: i128) -> Result<i128, KoraError> {
-    if b == 0 {
-        return Err(KoraError::InvalidAmount);
-    }
-    a.checked_div(b).ok_or(KoraError::ArithmeticOverflow)
-}
-
-/// Safe multiplication with overflow check
-pub fn safe_mul(a: i128, b: i128) -> Result<i128, KoraError> {
-    a.checked_mul(b).ok_or(KoraError::ArithmeticOverflow)
-}
-
-/// Safe division, returns error on divide-by-zero or overflow
-pub fn safe_div(a: i128, b: i128) -> Result<i128, KoraError> {
-    if b == 0 {
-        return Err(KoraError::ArithmeticOverflow);
-    }
-    a.checked_div(b).ok_or(KoraError::ArithmeticOverflow)
 }
 
 /// Safe multiplication — returns `ArithmeticOverflow` on overflow.
@@ -133,12 +113,20 @@ pub fn safe_mul(a: i128, b: i128) -> Result<i128, KoraError> {
     a.checked_mul(b).ok_or(KoraError::ArithmeticOverflow)
 }
 
+/// Safe division — returns `InvalidAmount` on divide-by-zero, `ArithmeticOverflow` otherwise.
+pub fn safe_div(a: i128, b: i128) -> Result<i128, KoraError> {
+    if b == 0 {
+        return Err(KoraError::InvalidAmount);
+    }
+    a.checked_div(b).ok_or(KoraError::ArithmeticOverflow)
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::Env;
+    use soroban_sdk::{testutils::Ledger, Env, String as SorobanString};
 
     #[test]
     fn test_require_non_zero_amount() {
@@ -160,6 +148,67 @@ mod tests {
         assert!(require_amount_within_bounds(0, 100).is_ok());
         assert!(require_amount_within_bounds(100, 100).is_ok());
         assert!(require_amount_within_bounds(101, 100).is_err());
+    }
+
+    #[test]
+    fn test_require_future_timestamp() {
+        let env = Env::default();
+        env.ledger().set_timestamp(1_000_000);
+
+        assert!(require_future_timestamp(&env, 1_000_000).is_err()); // equal (not future)
+        assert!(require_future_timestamp(&env, 999_999).is_err()); // past
+        assert!(require_future_timestamp(&env, 1_000_001).is_ok()); // future
+    }
+
+    #[test]
+    fn test_require_valid_risk_score() {
+        assert!(require_valid_risk_score(0).is_ok());
+        assert!(require_valid_risk_score(50).is_ok());
+        assert!(require_valid_risk_score(100).is_ok());
+        assert!(require_valid_risk_score(101).is_err());
+    }
+
+    #[test]
+    fn test_require_valid_fee_bps() {
+        assert!(require_valid_fee_bps(0).is_ok());
+        assert!(require_valid_fee_bps(50).is_ok());
+        assert!(require_valid_fee_bps(10_000).is_ok());
+        assert!(require_valid_fee_bps(10_001).is_err());
+    }
+
+    #[test]
+    fn test_require_valid_bps_range() {
+        assert!(require_valid_bps_range(50, 0, 1000).is_ok());
+        assert!(require_valid_bps_range(0, 0, 1000).is_ok());
+        assert!(require_valid_bps_range(1000, 0, 1000).is_ok());
+        assert!(require_valid_bps_range(1001, 0, 1000).is_err());
+    }
+
+    #[test]
+    fn test_require_non_empty_string() {
+        let env = Env::default();
+        let empty_str = SorobanString::from_str(&env, "");
+        let non_empty_str = SorobanString::from_str(&env, "test");
+
+        assert!(require_non_empty_string(&empty_str).is_err());
+        assert!(require_non_empty_string(&non_empty_str).is_ok());
+    }
+
+    #[test]
+    fn test_require_non_empty_bytes() {
+        let env = Env::default();
+        let empty_bytes = Bytes::from_slice(&env, &[]);
+        let non_empty_bytes = Bytes::from_slice(&env, &[1, 2, 3]);
+
+        let empty_result = require_non_empty_bytes(&empty_bytes);
+        assert!(empty_result.is_err());
+        assert_eq!(
+            empty_result.unwrap_err(),
+            KoraError::EmptyBytes,
+            "Empty bytes should return EmptyBytes error"
+        );
+
+        assert!(require_non_empty_bytes(&non_empty_bytes).is_ok());
     }
 
     #[test]
@@ -190,7 +239,7 @@ mod tests {
     #[test]
     fn test_safe_sub() {
         assert_eq!(safe_sub(300, 100).unwrap(), 200);
-        // Underflow returns ArithmeticUnderflow, not ArithmeticOverflow
+        // Underflow returns ArithmeticUnderflow
         let err = safe_sub(100, 200).unwrap_err();
         assert_eq!(err, KoraError::ArithmeticUnderflow);
     }
@@ -202,36 +251,8 @@ mod tests {
     }
 
     #[test]
-    fn test_require_valid_fee_bps() {
-        assert!(require_valid_fee_bps(0).is_ok());
-        assert!(require_valid_fee_bps(10_000).is_ok());
-        assert!(require_valid_fee_bps(10_001).is_err());
-    }
-
-    #[test]
-    fn test_require_valid_risk_score() {
-        assert!(require_valid_risk_score(0).is_ok());
-        assert!(require_valid_risk_score(100).is_ok());
-        assert!(require_valid_risk_score(101).is_err());
-    }
-
-    #[test]
-    fn test_safe_mul() {
-        assert_eq!(safe_mul(100, 200).unwrap(), 20_000);
-        assert!(safe_mul(i128::MAX, 2).is_err());
-    }
-
-    #[test]
     fn test_safe_div() {
         assert_eq!(safe_div(200, 4).unwrap(), 50);
         assert!(safe_div(100, 0).is_err());
-    }
-
-    #[test]
-    fn test_require_valid_bps_range() {
-        assert!(require_valid_bps_range(50, 0, 1000).is_ok());
-        assert!(require_valid_bps_range(0, 0, 1000).is_ok());
-        assert!(require_valid_bps_range(1000, 0, 1000).is_ok());
-        assert!(require_valid_bps_range(1001, 0, 1000).is_err());
     }
 }
