@@ -61,6 +61,7 @@ pub enum DataKey {
     MigrationVersion,
 }
 
+
 // ── Contract ─────────────────────────────────────────────────────────────────
 
 #[contract]

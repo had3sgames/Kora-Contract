@@ -1,6 +1,7 @@
 #![no_std]
 
-use kora_shared::{errors::KoraError, events};
+use kora_shared::{errors::KoraError, events, reentrancy::ReentrancyGuard};
+
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
 
 // ── TTL constants (~30 days in ledgers at ~5s/ledger) ────────────────────────

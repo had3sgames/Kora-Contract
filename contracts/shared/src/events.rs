@@ -184,7 +184,50 @@ pub fn role_revoked(env: &Env, admin: &Address, target: &Address) {
     );
 }
 
+// ── Financing Pool Events ─────────────────────────────────────────────────
+
+/// Emitted when a financing pool is opened.
+/// Payload: (marketplace_actor, invoice_id, token, face_value, ledger_timestamp)
+pub fn pool_opened(env: &Env, marketplace: &Address, invoice_id: u64, token: &Address, face_value: i128) {
+    emit(
+        env,
+        symbol_short!("PLOP"),
+        (
+            marketplace.clone(),
+            invoice_id,
+            token.clone(),
+            face_value,
+            env.ledger().timestamp(),
+        ),
+    );
+}
+
+/// Emitted when an investor position is recorded.
+/// Payload: (admin_actor, invoice_id, investor, contributed, share_bps, ledger_timestamp)
+pub fn position_recorded(
+    env: &Env,
+    admin: &Address,
+    invoice_id: u64,
+    investor: &Address,
+    contributed: i128,
+    share_bps: u32,
+) {
+    emit(
+        env,
+        symbol_short!("POSR"),
+        (
+            admin.clone(),
+            invoice_id,
+            investor.clone(),
+            contributed,
+            share_bps,
+            env.ledger().timestamp(),
+        ),
+    );
+}
+
 // ── Risk Registry Events ──────────────────────────────────────────────────────
+
 
 /// Emitted when the admin whitelists a new verifier.
 /// Payload: (admin, verifier, timestamp)
