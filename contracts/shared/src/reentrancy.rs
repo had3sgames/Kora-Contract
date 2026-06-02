@@ -2,21 +2,14 @@ use crate::errors::KoraError;
 use soroban_sdk::{contracttype, Env};
 
 /// Storage key for the reentrancy lock.
-///
-/// Stored in `instance()` storage so it is scoped to the contract instance
-/// and cleared automatically when the transaction ends (no persistent bleed).
 #[contracttype]
 pub enum GuardKey {
-    /// Active reentrancy lock flag.
     Lock,
 }
 
 // ── Low-level helpers ─────────────────────────────────────────────────────────
 
-/// Acquire the reentrancy lock.
-///
-/// Returns `KoraError::Reentrancy` if the lock is already held, preventing
-/// any recursive (reentrant) call from proceeding.
+/// Acquire the reentrancy lock. Returns `KoraError::Reentrancy` if already held.
 pub fn acquire_guard(env: &Env) -> Result<(), KoraError> {
     if env.storage().instance().has(&GuardKey::Lock) {
         return Err(KoraError::Reentrancy);
@@ -26,9 +19,6 @@ pub fn acquire_guard(env: &Env) -> Result<(), KoraError> {
 }
 
 /// Release the reentrancy lock.
-///
-/// Must be called on every exit path of a protected function.
-/// Prefer [`ReentrancyGuard`] which handles this automatically via RAII.
 pub fn release_guard(env: &Env) {
     env.storage().instance().remove(&GuardKey::Lock);
 }
@@ -93,7 +83,6 @@ mod tests {
     #[test]
     fn test_release_without_acquire_is_safe() {
         let env = Env::default();
-        // Releasing when not locked should not panic
         release_guard(&env);
         assert!(acquire_guard(&env).is_ok());
         release_guard(&env);
@@ -102,12 +91,10 @@ mod tests {
     #[test]
     fn test_raii_guard_releases_on_early_return() {
         let env = Env::default();
-
         fn protected(env: &Env) -> Result<(), KoraError> {
             let _guard = ReentrancyGuard::new(env)?;
             Err(KoraError::InvalidAmount)
         }
-
         let _ = protected(&env);
         assert!(!is_locked(&env));
     }
@@ -115,32 +102,19 @@ mod tests {
     #[test]
     fn test_raii_guard_releases_on_success() {
         let env = Env::default();
-
         fn protected(env: &Env) -> Result<(), KoraError> {
             let _guard = ReentrancyGuard::new(env)?;
             Ok(())
         }
-
         protected(&env).unwrap();
         assert!(!is_locked(&env));
     }
 
     #[test]
-    fn test_nested_guard_acquisition_fails() {
+    fn test_raii_nested_guard_fails() {
         let env = Env::default();
-        assert!(acquire_guard(&env).is_ok());
-        let result = acquire_guard(&env);
-        assert!(result.is_err());
-        release_guard(&env);
-    }
-
-    #[test]
-    fn test_guard_release_allows_reacquisition() {
-        let env = Env::default();
-        assert!(acquire_guard(&env).is_ok());
-        release_guard(&env);
-        assert!(acquire_guard(&env).is_ok());
-        release_guard(&env);
+        let _guard = ReentrancyGuard::new(&env).unwrap();
+        assert_eq!(ReentrancyGuard::new(&env).unwrap_err(), KoraError::Reentrancy);
     }
 
     #[test]
