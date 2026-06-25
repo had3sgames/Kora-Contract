@@ -1058,4 +1058,21 @@ mod tests {
         let result = t.mp.try_fund_invoice(&investor, &id, &i128::MAX);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_fund_cancelled_listing() {
+        let t = deploy();
+        let id = list_one(&t);
+
+        t.mp.cancel_listing(&t.seller, &id);
+        let listing = t.mp.get_listing(&id);
+        assert!(!listing.is_active);
+
+        let investor = Address::generate(&t.env);
+        let result = t.mp.try_fund_invoice(&investor, &id, &1_000_000i128);
+        assert_eq!(
+            result.unwrap_err().unwrap(),
+            KoraError::ListingAlreadyCancelled
+        );
+    }
 }
