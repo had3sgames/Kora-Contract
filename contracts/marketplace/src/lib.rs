@@ -44,6 +44,11 @@ impl MarketplaceContract {
             return Err(KoraError::AlreadyInitialized);
         }
         kora_shared::validation::require_valid_fee_bps(fee_bps)?;
+        kora_shared::validation::require_not_self(&env, &admin)?;
+        kora_shared::validation::require_not_self(&env, &invoice_nft)?;
+        kora_shared::validation::require_not_self(&env, &financing_pool)?;
+        kora_shared::validation::require_not_self(&env, &treasury)?;
+        kora_shared::validation::require_not_self(&env, &access_control)?;
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::InvoiceNft, &invoice_nft);
         env.storage().instance().set(&DataKey::FinancingPool, &financing_pool);
@@ -439,6 +444,36 @@ mod tests {
 
         // Try to cancel again
         let result = client.try_cancel_listing(&seller, &1u64);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_initialize_self_as_admin_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MarketplaceContract);
+        let client = MarketplaceContractClient::new(&env, &contract_id);
+        let nft = Address::generate(&env);
+        let pool = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let ac = Address::generate(&env);
+        // contract's own address as admin must be rejected
+        let result = client.try_initialize(&contract_id, &nft, &pool, &treasury, &50u32, &ac);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_initialize_self_as_counterparty_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MarketplaceContract);
+        let client = MarketplaceContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let pool = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let ac = Address::generate(&env);
+        // contract's own address as invoice_nft must be rejected
+        let result = client.try_initialize(&admin, &contract_id, &pool, &treasury, &50u32, &ac);
         assert!(result.is_err());
     }
 }

@@ -34,6 +34,7 @@ impl AccessControlContract {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(KoraError::AlreadyInitialized);
         }
+        kora_shared::validation::require_not_self(&env, &admin)?;
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Paused, &false);
         env.storage().persistent().set(&DataKey::Role(admin.clone()), &Role::Admin);
@@ -102,6 +103,7 @@ impl AccessControlContract {
         if current_admin == new_admin {
             return Err(KoraError::InvalidAddress);
         }
+        kora_shared::validation::require_not_self(&env, &new_admin)?;
         env.storage().instance().set(&DataKey::Admin, &new_admin);
         env.storage().persistent().set(&DataKey::Role(new_admin.clone()), &Role::Admin);
         env.storage().persistent().set(&DataKey::Role(current_admin), &Role::None);
@@ -237,6 +239,24 @@ mod tests {
     }
 
     #[test]
+    fn test_initialize_self_as_admin_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, AccessControlContract);
+        let client = AccessControlContractClient::new(&env, &contract_id);
+        // Passing the contract's own address as admin must be rejected
+        let result = client.try_initialize(&contract_id);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_transfer_admin_to_self_contract_rejected() {
+        let (env, admin, client) = setup();
+        let contract_id = client.address.clone();
+        let result = client.try_transfer_admin(&admin, &contract_id);
+        assert!(result.is_err());
+    }
+}    #[test]
     fn test_role_override() {
         let (env, admin, client) = setup();
         let user = Address::generate(&env);

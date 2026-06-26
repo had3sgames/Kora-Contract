@@ -24,6 +24,7 @@ impl RiskRegistryContract {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(KoraError::AlreadyInitialized);
         }
+        kora_shared::validation::require_not_self(&env, &admin)?;
         env.storage().instance().set(&DataKey::Admin, &admin);
         Ok(())
     }
@@ -32,6 +33,7 @@ impl RiskRegistryContract {
     pub fn add_verifier(env: Env, admin: Address, verifier: Address) -> Result<(), KoraError> {
         admin.require_auth();
         Self::require_admin(&env, &admin)?;
+        kora_shared::validation::require_not_self(&env, &verifier)?;
         env.storage()
             .persistent()
             .set(&DataKey::Verifier(verifier), &true);
@@ -512,5 +514,23 @@ mod tests {
         assert_eq!(client.get_sme_profile(&sme2).risk_score, 60);
         assert_eq!(client.get_sme_profile(&sme1).verifier, verifier1);
         assert_eq!(client.get_sme_profile(&sme2).verifier, verifier2);
+    }
+
+    #[test]
+    fn test_initialize_self_as_admin_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, RiskRegistryContract);
+        let client = RiskRegistryContractClient::new(&env, &contract_id);
+        let result = client.try_initialize(&contract_id);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_add_verifier_self_as_verifier_rejected() {
+        let (env, admin, client) = setup();
+        let contract_id = client.address.clone();
+        let result = client.try_add_verifier(&admin, &contract_id);
+        assert!(result.is_err());
     }
 }

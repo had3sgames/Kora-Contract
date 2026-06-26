@@ -34,6 +34,9 @@ impl InvoiceNftContract {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(KoraError::AlreadyInitialized);
         }
+        kora_shared::validation::require_not_self(&env, &admin)?;
+        kora_shared::validation::require_not_self(&env, &access_control)?;
+        kora_shared::validation::require_distinct(&admin, &access_control)?;
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage()
             .instance()
@@ -900,5 +903,28 @@ mod tests {
             &Symbol::new(&env, "USDC"), &due_date, &ipfs_cid, &21u32,
         );
         assert_eq!(client.get_invoice(&id2).risk_tier, RiskTier::AA);
+    }
+
+    #[test]
+    fn test_initialize_self_as_admin_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, InvoiceNftContract);
+        let client = InvoiceNftContractClient::new(&env, &contract_id);
+        let ac = Address::generate(&env);
+        let result = client.try_initialize(&contract_id, &ac);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_initialize_admin_equals_access_control_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, InvoiceNftContract);
+        let client = InvoiceNftContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        // admin == access_control must be rejected (require_distinct)
+        let result = client.try_initialize(&admin, &admin);
+        assert!(result.is_err());
     }
 }

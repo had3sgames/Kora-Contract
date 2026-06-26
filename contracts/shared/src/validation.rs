@@ -1,4 +1,4 @@
-use soroban_sdk::{Bytes, Env, String};
+use soroban_sdk::{Address, Bytes, Env, String};
 use crate::errors::KoraError;
 
 pub fn require_non_zero_amount(amount: i128) -> Result<(), KoraError> {
@@ -75,6 +75,24 @@ pub fn safe_sub(a: i128, b: i128) -> Result<i128, KoraError> {
     a.checked_sub(b).ok_or(KoraError::ArithmeticOverflow)
 }
 
+/// Reject the contract's own address being passed as a counterparty or admin.
+/// Prevents self-referential configuration bugs (e.g. admin == contract itself).
+pub fn require_not_self(env: &Env, addr: &Address) -> Result<(), KoraError> {
+    if addr == &env.current_contract_address() {
+        return Err(KoraError::InvalidAddress);
+    }
+    Ok(())
+}
+
+/// Reject two addresses being identical where they must be distinct
+/// (e.g. admin == treasury, or two different contract addresses colliding).
+pub fn require_distinct(a: &Address, b: &Address) -> Result<(), KoraError> {
+    if a == b {
+        return Err(KoraError::InvalidAddress);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,5 +129,23 @@ mod tests {
     fn test_safe_sub() {
         assert_eq!(safe_sub(300, 100).unwrap(), 200);
         assert!(safe_sub(100, 200).is_err());
+    }
+
+    #[test]
+    fn test_require_not_self() {
+        let env = Env::default();
+        let self_addr = env.current_contract_address();
+        let other = soroban_sdk::Address::from_contract_id(&soroban_sdk::BytesN::from_array(&env, &[1u8; 32]));
+        assert!(require_not_self(&env, &self_addr).is_err());
+        assert!(require_not_self(&env, &other).is_ok());
+    }
+
+    #[test]
+    fn test_require_distinct() {
+        let env = Env::default();
+        let a = soroban_sdk::Address::from_contract_id(&soroban_sdk::BytesN::from_array(&env, &[1u8; 32]));
+        let b = soroban_sdk::Address::from_contract_id(&soroban_sdk::BytesN::from_array(&env, &[2u8; 32]));
+        assert!(require_distinct(&a, &a).is_err());
+        assert!(require_distinct(&a, &b).is_ok());
     }
 }
