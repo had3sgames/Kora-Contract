@@ -51,6 +51,11 @@ impl FinancingPoolContract {
             return Err(KoraError::AlreadyInitialized);
         }
         kora_shared::validation::require_valid_fee_bps(late_penalty_bps)?;
+        kora_shared::validation::require_not_self(&env, &admin)?;
+        kora_shared::validation::require_not_self(&env, &invoice_nft)?;
+        kora_shared::validation::require_not_self(&env, &risk_registry)?;
+        kora_shared::validation::require_not_self(&env, &treasury)?;
+        kora_shared::validation::require_not_self(&env, &access_control)?;
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage()
             .instance()
@@ -672,6 +677,17 @@ mod tests {
     }
 
     #[test]
+    fn test_initialize_self_as_admin_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, FinancingPoolContract);
+        let client = FinancingPoolContractClient::new(&env, &contract_id);
+        let nft = Address::generate(&env);
+        let rr = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let ac = Address::generate(&env);
+        // contract_id as admin must be rejected
+        let result = client.try_initialize(&contract_id, &nft, &rr, &treasury, &200u32, &ac);
     fn test_record_position_exceeds_max_amount() {
         let (env, admin, _nft, _treasury, _ac, client) = setup();
         let investor = Address::generate(&env);
@@ -691,6 +707,7 @@ mod tests {
     }
 
     #[test]
+    fn test_initialize_self_as_nft_rejected() {
     fn test_record_position_contributed_exceeds_total_pool() {
         let (env, admin, _nft, _treasury, _ac, client) = setup();
         let investor = Address::generate(&env);
@@ -850,6 +867,11 @@ mod tests {
         let contract_id = env.register_contract(None, FinancingPoolContract);
         let client = FinancingPoolContractClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
+        let rr = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let ac = Address::generate(&env);
+        let result = client.try_initialize(&admin, &contract_id, &rr, &treasury, &200u32, &ac);
+        assert!(result.is_err());
         let nft = Address::generate(&env);
         let treasury = Address::generate(&env);
         let ac = Address::generate(&env);

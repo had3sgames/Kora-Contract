@@ -41,6 +41,12 @@ impl TreasuryContract {
             return Err(KoraError::AlreadyInitialized);
         }
         require_valid_fee_bps(fee_bps)?;
+        kora_shared::validation::require_not_self(&env, &admin)?;
+        env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
+        env.storage()
+            .instance()
+            .set(&DataKey::WithdrawalLock, &false);
         env.storage().persistent().set(&DataKey::Admin, &admin);
         env.storage().persistent().extend_ttl(
             &DataKey::Admin,
@@ -453,5 +459,15 @@ mod tests {
         let _ = client.try_emergency_withdraw(&admin, &token, &recipient);
         // Lock must be released regardless of balance
         assert!(client.try_set_fee_bps(&admin, &100u32).is_ok());
+    }
+
+    #[test]
+    fn test_initialize_self_as_admin_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, TreasuryContract);
+        let client = TreasuryContractClient::new(&env, &contract_id);
+        let result = client.try_initialize(&contract_id, &50u32);
+        assert!(result.is_err());
     }
 }

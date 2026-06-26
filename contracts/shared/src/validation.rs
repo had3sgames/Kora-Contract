@@ -1,3 +1,4 @@
+use soroban_sdk::{Address, Bytes, Env, String};
 use crate::errors::KoraError;
 use soroban_sdk::{Bytes, Env, String};
 
@@ -109,6 +110,24 @@ pub fn safe_add(a: i128, b: i128) -> Result<i128, KoraError> {
 /// Safe subtraction — returns `ArithmeticUnderflow` when result would underflow.
 pub fn safe_sub(a: i128, b: i128) -> Result<i128, KoraError> {
     a.checked_sub(b).ok_or(KoraError::ArithmeticUnderflow)
+}
+
+/// Reject the contract's own address being passed as a counterparty or admin.
+/// Prevents self-referential configuration bugs (e.g. admin == contract itself).
+pub fn require_not_self(env: &Env, addr: &Address) -> Result<(), KoraError> {
+    if addr == &env.current_contract_address() {
+        return Err(KoraError::InvalidAddress);
+    }
+    Ok(())
+}
+
+/// Reject two addresses being identical where they must be distinct
+/// (e.g. admin == treasury, or two different contract addresses colliding).
+pub fn require_distinct(a: &Address, b: &Address) -> Result<(), KoraError> {
+    if a == b {
+        return Err(KoraError::InvalidAddress);
+    }
+    Ok(())
 }
 
 /// Safe multiplication — returns `ArithmeticOverflow` on overflow.
