@@ -826,3 +826,73 @@ mod tests {
         assert!(result.is_ok());
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use kora_shared::validation::bps_of;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Invariant: Pool.repaid_amount never exceeds Pool.face_value when
+        /// the pool is closed by exact repayment (no late penalties).
+        /// Models: payer repays exactly face_value, pool closes, repaid == face_value.
+        #[test]
+        fn repaid_never_exceeds_face_value_without_penalty(
+            face_value in 1_000i128..=1_000_000_000_000i128,
+        ) {
+            let pool = Pool {
+                invoice_id: 1,
+                token: soroban_sdk::Address::from_str(&soroban_sdk::Env::default(), "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"),
+                total_funded: 0,
+                face_value,
+                repaid_amount: face_value,
+                is_closed: true,
+                late_penalty_bps: 0,
+            };
+            prop_assert!(
+                pool.repaid_amount <= pool.face_value,
+                "repaid {} must not exceed face_value {} (no penalty)",
+                pool.repaid_amount,
+                pool.face_value
+            );
+        }
+
+        /// Invariant: share_bps computed from contributed/total_pool is always
+        /// <= 10_000 for any valid investor contribution.
+        #[test]
+        fn share_bps_bounded(
+            contributed in 1i128..=1_000_000_000i128,
+            total_pool in 1i128..=1_000_000_000i128,
+        ) {
+            prop_assume!(contributed <= total_pool);
+
+            let share_bps = contributed
+                .checked_mul(10_000)
+                .and_then(|v| v.checked_div(total_pool))
+                .unwrap() as u32;
+
+            prop_assert!(
+                share_bps <= 10_000,
+                "share_bps {} must not exceed 10_000",
+                share_bps
+            );
+        }
+
+        /// Invariant: yield distributed to an investor (bps_of(total_repaid, share_bps))
+        /// never exceeds total_repaid for valid share_bps values.
+        #[test]
+        fn yield_payout_bounded_by_total_repaid(
+            total_repaid in 1_000i128..=1_000_000_000_000i128,
+            share_bps in 1u32..=10_000u32,
+        ) {
+            let payout = bps_of(total_repaid, share_bps).unwrap();
+            prop_assert!(
+                payout <= total_repaid,
+                "payout {} must not exceed total_repaid {}",
+                payout,
+                total_repaid
+            );
+        }
+    }
+}

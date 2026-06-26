@@ -342,3 +342,57 @@ pub fn upgrade_executed(env: &Env, admin: &Address, wasm_hash: &soroban_sdk::Byt
 }
 
 // AUDIT FIX: Removed duplicate sme_invoice_counted — use sme_invoice_count_incremented instead.
+
+// ── Multisig Events ──────────────────────────────────────────────────────────
+
+pub fn multisig_configured(env: &Env, threshold: u32, signer_count: u32) {
+    emit(
+        env,
+        symbol_short!("MS_CFG"),
+        (threshold, signer_count, env.ledger().timestamp()),
+    );
+}
+
+pub fn action_proposed(env: &Env, proposal_id: u64, proposer: &Address) {
+    emit(
+        env,
+        symbol_short!("MS_PROP"),
+        (proposal_id, proposer.clone(), env.ledger().timestamp()),
+    );
+}
+
+pub fn action_approved(env: &Env, proposal_id: u64, approver: &Address, approval_count: u32) {
+    emit(
+        env,
+        symbol_short!("MS_APPR"),
+        (
+            proposal_id,
+            approver.clone(),
+            approval_count,
+            env.ledger().timestamp(),
+        ),
+    );
+}
+
+pub fn action_executed(env: &Env, proposal_id: u64, executor: &Address) {
+    emit(
+        env,
+        symbol_short!("MS_EXEC"),
+        (proposal_id, executor.clone(), env.ledger().timestamp()),
+    );
+}
+
+// ── Refund Events ────────────────────────────────────────────────────────────
+
+pub fn refund_claimed(env: &Env, invoice_id: u64, investor: &Address, amount: i128) {
+    emit(
+        env,
+        symbol_short!("REFUND"),
+        (
+            invoice_id,
+            investor.clone(),
+            amount,
+            env.ledger().timestamp(),
+        ),
+    );
+}
