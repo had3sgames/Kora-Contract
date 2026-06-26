@@ -350,3 +350,91 @@ mod tests {
         assert!(require_valid_risk_score(101).is_err());
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Invariant 1: bps_of never exceeds the input amount when bps <= 10_000.
+        /// fee = amount * bps / 10_000, so fee <= amount for bps in [0, 10_000].
+        #[test]
+        fn bps_of_never_exceeds_amount(
+            amount in 0i128..=1_000_000_000_000i128,
+            bps in 0u32..=10_000u32,
+        ) {
+            let fee = bps_of(amount, bps).unwrap();
+            prop_assert!(fee >= 0, "fee must be non-negative");
+            prop_assert!(fee <= amount, "fee {} must not exceed amount {}", fee, amount);
+        }
+
+        /// Invariant 2: safe_add and safe_sub are inverses for non-overflowing values.
+        /// For any a, b where a+b doesn't overflow: safe_sub(safe_add(a, b), b) == a.
+        #[test]
+        fn add_sub_roundtrip(
+            a in 0i128..=(i128::MAX / 2),
+            b in 0i128..=(i128::MAX / 2),
+        ) {
+            let sum = safe_add(a, b).unwrap();
+            let back = safe_sub(sum, b).unwrap();
+            prop_assert_eq!(back, a);
+        }
+
+        /// Invariant 3: bps_of(amount, 10_000) always equals amount (100% fee).
+        /// And bps_of(amount, 0) always equals 0 (0% fee).
+        #[test]
+        fn bps_of_boundary_identity(amount in 0i128..=1_000_000_000_000i128) {
+            let full = bps_of(amount, 10_000).unwrap();
+            prop_assert_eq!(full, amount, "100% bps must equal the full amount");
+
+            let zero = bps_of(amount, 0).unwrap();
+            prop_assert_eq!(zero, 0, "0% bps must yield zero");
+        }
+
+        /// Invariant 4: For any valid split of contributed amounts across N investors
+        /// where each contributed_i / total_pool is computed as share_bps, the sum
+        /// of all share_bps never exceeds 10_000.
+        #[test]
+        fn investor_shares_never_exceed_total(
+            n in 2u32..=10u32,
+            total_pool in 1_000i128..=1_000_000_000i128,
+            seed in 1u64..=u64::MAX,
+        ) {
+            let mut rng_state = seed;
+            let mut remaining = total_pool;
+            let mut total_bps = 0u32;
+
+            for i in 0..n {
+                let contributed = if i == n - 1 {
+                    remaining
+                } else {
+                    // Simple deterministic split
+                    rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    let frac = (rng_state % 80) + 1; // 1-80% of remaining
+                    let c = (remaining * frac as i128) / 100;
+                    let c = if c == 0 { 1 } else { c };
+                    let c = c.min(remaining);
+                    remaining -= c;
+                    c
+                };
+
+                if contributed <= 0 || total_pool <= 0 {
+                    continue;
+                }
+                let share_bps = (contributed
+                    .checked_mul(10_000)
+                    .unwrap()
+                    .checked_div(total_pool)
+                    .unwrap()) as u32;
+                total_bps += share_bps;
+            }
+
+            prop_assert!(
+                total_bps <= 10_000,
+                "Sum of investor share_bps ({}) must not exceed 10_000",
+                total_bps
+            );
+        }
+    }
+}
