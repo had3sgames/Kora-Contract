@@ -66,6 +66,7 @@ impl FinancingPoolContract {
         token: Address,
     ) -> Result<(), KoraError> {
         marketplace.require_auth();
+        Self::require_not_paused(&env)?;
 
         if env.storage().persistent().has(&DataKey::Pool(invoice_id)) {
             return Err(KoraError::PoolAlreadyClosed);
@@ -127,6 +128,7 @@ impl FinancingPoolContract {
     ) -> Result<(), KoraError> {
         caller.require_auth();
         Self::require_admin(&env, &caller)?;
+        Self::require_not_paused(&env)?;
 
         if contributed <= 0 || total_pool <= 0 {
             return Err(KoraError::InvalidAmount);
@@ -401,6 +403,19 @@ impl FinancingPoolContract {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    fn require_not_paused(env: &Env) -> Result<(), KoraError> {
+        let ac: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::AccessControl)
+            .ok_or(KoraError::NotInitialized)?;
+        let client = kora_access_control::AccessControlContractClient::new(env, &ac);
+        if client.is_paused() {
+            return Err(KoraError::ProtocolPaused);
+        }
+        Ok(())
+    }
 
     fn require_admin(env: &Env, caller: &Address) -> Result<(), KoraError> {
         let admin: Address = env
