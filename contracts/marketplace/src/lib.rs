@@ -7,9 +7,9 @@ use kora_shared::{
     events,
     reentrancy::ReentrancyGuard,
     types::Listing,
-    validation::{bps_of, require_non_zero_amount, require_valid_fee_bps, safe_add, safe_sub},
+    validation::{bps_of_normalized, require_non_zero_amount, require_valid_fee_bps, safe_add, safe_sub, UPGRADE_TIMELOCK_DELAY},
 };
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Env};
 
 // ~30 days in ledgers at ~5s/ledger
 const PERSISTENT_TTL_THRESHOLD: u32 = 518_400;
@@ -27,6 +27,7 @@ pub enum DataKey {
     FeeBps,
     Listing(u64),
     WhitelistedToken(Address),
+    UpgradeProposal,
 }
 
 // ── Config struct ─────────────────────────────────────────────────────────────
@@ -225,12 +226,13 @@ impl MarketplaceContract {
 
         let config = Self::load_config(&env)?;
 
-        let fee = bps_of(amount, config.fee_bps)?;
+        let token_client = token::Client::new(&env, &listing.token);
+        let token_decimals = token_client.decimals();
+
+        let fee = bps_of_normalized(amount, config.fee_bps, token_decimals)?;
         let net = amount
             .checked_sub(fee)
             .ok_or(KoraError::ArithmeticOverflow)?;
-
-        let token_client = token::Client::new(&env, &listing.token);
 
         // Transfer fee to treasury (if non-zero)
         if fee > 0 {
@@ -314,6 +316,45 @@ impl MarketplaceContract {
             .persistent()
             .get(&DataKey::WhitelistedToken(token))
             .unwrap_or(false)
+    }
+
+    // ── Upgrade ────────────────────────────────────────────────────────────────
+
+    pub fn propose_upgrade(
+        env: Env,
+        admin: Address,
+        new_wasm_hash: BytesN<32>,
+    ) -> Result<(), KoraError> {
+        admin.require_auth();
+        let config = Self::load_config(&env)?;
+        if config.admin != admin {
+            return Err(KoraError::NotAdmin);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::UpgradeProposal, &(new_wasm_hash.clone(), env.ledger().timestamp()));
+        events::upgrade_proposed(&env, &admin, &new_wasm_hash);
+        Ok(())
+    }
+
+    pub fn execute_upgrade(env: Env, admin: Address) -> Result<(), KoraError> {
+        admin.require_auth();
+        let config = Self::load_config(&env)?;
+        if config.admin != admin {
+            return Err(KoraError::NotAdmin);
+        }
+        let (wasm_hash, proposed_at): (BytesN<32>, u64) = env
+            .storage()
+            .instance()
+            .get(&DataKey::UpgradeProposal)
+            .ok_or(KoraError::NoUpgradeProposed)?;
+        if env.ledger().timestamp() < proposed_at + UPGRADE_TIMELOCK_DELAY {
+            return Err(KoraError::UpgradeTimelockNotElapsed);
+        }
+        env.storage().instance().remove(&DataKey::UpgradeProposal);
+        events::upgrade_executed(&env, &admin, &wasm_hash);
+        env.deployer().update_current_contract_wasm(wasm_hash);
+        Ok(())
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
@@ -430,7 +471,8 @@ mod tests {
         let pool_id = env.register_contract(None, FinancingPoolContract);
         let pool_client = FinancingPoolContractClient::new(&env, &pool_id);
         let ac2 = Address::generate(&env);
-        pool_client.initialize(&admin, &nft_id, &treasury, &ac2, &200u32);
+        let oracle = Address::generate(&env);
+        pool_client.initialize(&admin, &nft_id, &treasury, &ac2, &200u32, &oracle);
 
         let mp_id = env.register_contract(None, MarketplaceContract);
         let mp = MarketplaceContractClient::new(&env, &mp_id);
@@ -1057,5 +1099,22 @@ mod tests {
         // asking_price = 9_500_000_000; any amount > that is rejected before overflow
         let result = t.mp.try_fund_invoice(&investor, &id, &i128::MAX);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_fund_cancelled_listing() {
+        let t = deploy();
+        let id = list_one(&t);
+
+        t.mp.cancel_listing(&t.seller, &id);
+        let listing = t.mp.get_listing(&id);
+        assert!(!listing.is_active);
+
+        let investor = Address::generate(&t.env);
+        let result = t.mp.try_fund_invoice(&investor, &id, &1_000_000i128);
+        assert_eq!(
+            result.unwrap_err().unwrap(),
+            KoraError::ListingAlreadyCancelled
+        );
     }
 }
