@@ -620,7 +620,7 @@ mod tests {
             &sme, &debtor_hash, &1_000_000_000i128,
             &Symbol::new(&env, "USDC"), &due_date, &ipfs_cid, &10u32,
         );
-        assert_eq!(result.unwrap_err().unwrap(), KoraError::EmptyString);
+        assert_eq!(result.unwrap_err().unwrap(), KoraError::EmptyBytes);
     }
 
     #[test]
