@@ -200,8 +200,8 @@ impl AccessControlContract {
         // Remove old admin's role entry to reclaim storage
         env.storage()
             .persistent()
-            .remove(&DataKey::Role(current_admin));
-        events::admin_transferred(&env, &new_admin);
+            .remove(&DataKey::Role(current_admin.clone()));
+        events::admin_transferred(&env, &current_admin, &new_admin);
         Ok(())
     }
 
@@ -395,7 +395,7 @@ impl AccessControlContract {
                     .persistent()
                     .set(&DataKey::Role(new_admin.clone()), &Role::Admin);
                 Self::bump_persistent(&env, &DataKey::Role(new_admin.clone()));
-                events::admin_transferred(&env, &new_admin);
+                events::admin_transferred(&env, &executor, &new_admin);
             }
         }
 
