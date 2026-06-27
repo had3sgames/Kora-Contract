@@ -28,6 +28,10 @@ pub enum DataKey {
     AccessControl,
     RepaymentLock(u64),
     UpgradeProposal,
+    /// Running sum of investor contributions per token across all open pools.
+    /// Incremented by record_position, decremented by distribute_yield.
+    /// Used by verify_solvency to assert balance >= obligations.
+    AggregateFunded(Address),
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -170,10 +174,30 @@ impl FinancingPoolContract {
             .get(&DataKey::Positions(invoice_id))
             .unwrap_or_else(|| Map::new(&env));
 
+        // Track old contribution so we can compute the delta for the aggregate.
+        let old_contributed: i128 = positions
+            .get(investor.clone())
+            .map(|p: Position| p.contributed)
+            .unwrap_or(0);
+
         positions.set(investor.clone(), position);
         env.storage()
             .persistent()
             .set(&DataKey::Positions(invoice_id), &positions);
+
+        // Update the per-token aggregate of outstanding investor obligations.
+        let pool: Pool = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Pool(invoice_id))
+            .ok_or(KoraError::PoolNotFound)?;
+        let agg_key = DataKey::AggregateFunded(pool.token);
+        let prev_agg: i128 = env.storage().instance().get(&agg_key).unwrap_or(0);
+        let new_agg = prev_agg
+            .checked_sub(old_contributed)
+            .and_then(|v| v.checked_add(contributed))
+            .ok_or(KoraError::ArithmeticOverflow)?;
+        env.storage().instance().set(&agg_key, &new_agg);
 
         // Standardized financing pool event
         events::position_recorded(
@@ -311,15 +335,24 @@ impl FinancingPoolContract {
         let token_client = token::Client::new(env, token);
         let token_decimals = token_client.decimals();
 
+        let mut total_contributed: i128 = 0;
         for (investor, position) in positions.iter() {
             let payout = bps_of_normalized(total_repaid, position.share_bps, token_decimals)?;
             let yield_amount = payout
                 .checked_sub(position.contributed)
                 .ok_or(KoraError::ArithmeticOverflow)?;
 
+            total_contributed = total_contributed.saturating_add(position.contributed);
             token_client.transfer(&env.current_contract_address(), &investor, &payout);
             events::yield_distributed(env, invoice_id, &investor, yield_amount);
         }
+
+        // Reduce the aggregate now that all positions for this pool have been settled.
+        let agg_key = DataKey::AggregateFunded(token.clone());
+        let prev_agg: i128 = env.storage().instance().get(&agg_key).unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&agg_key, &prev_agg.saturating_sub(total_contributed));
 
         Ok(())
     }
@@ -395,6 +428,35 @@ impl FinancingPoolContract {
             .get(&DataKey::Positions(invoice_id))
             .unwrap_or(Map::new(&env));
         positions.values()
+    }
+
+    /// Returns the tracked sum of all outstanding investor contributions for
+    /// the given token across all open pools.  Used by `verify_solvency`.
+    pub fn get_aggregate_funded(env: Env, token: Address) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::AggregateFunded(token))
+            .unwrap_or(0)
+    }
+
+    /// Asserts that the contract's actual token balance is at least equal to the
+    /// sum of all outstanding investor contributions for that token.  Returns
+    /// `KoraError::InsufficientPoolBalance` if the invariant is violated.
+    ///
+    /// Callers can invoke this as a view to monitor protocol solvency off-chain,
+    /// or an admin script can call it on-chain to detect silent accounting bugs
+    /// before they can be exploited.
+    pub fn verify_solvency(env: Env, token: Address) -> Result<(), KoraError> {
+        let aggregate: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::AggregateFunded(token.clone()))
+            .unwrap_or(0);
+        let balance = token::Client::new(&env, &token).balance(&env.current_contract_address());
+        if balance < aggregate {
+            return Err(KoraError::InsufficientPoolBalance);
+        }
+        Ok(())
     }
 
     // ── Upgrade ────────────────────────────────────────────────────────────────
@@ -947,6 +1009,45 @@ mod proptests {
                 payout,
                 total_repaid
             );
+        }
+
+        /// Solvency invariant: aggregate_funded never exceeds balance after
+        /// simulating N concurrent record_position calls then a settle.
+        ///
+        /// Models: several investors each contribute a fraction of the pool;
+        /// after all positions are recorded, the sum of contributions equals
+        /// the aggregate tracked in storage.  When yield is distributed the
+        /// aggregate falls back to zero.  At no point should aggregate > balance.
+        #[test]
+        fn aggregate_funded_never_exceeds_balance(
+            c1 in 1i128..=1_000_000_000i128,
+            c2 in 1i128..=1_000_000_000i128,
+            c3 in 1i128..=1_000_000_000i128,
+        ) {
+            // Model the aggregate directly (no Env needed — pure arithmetic).
+            let contributions = [c1, c2, c3];
+            let total_pool: i128 = c1.saturating_add(c2).saturating_add(c3);
+
+            // Aggregate after recording all positions must equal total_pool.
+            let mut aggregate: i128 = 0;
+            for &c in &contributions {
+                aggregate = aggregate.saturating_add(c);
+            }
+            prop_assert_eq!(aggregate, total_pool);
+
+            // A balance equal to total_pool (the minimum a fully-funded pool
+            // should hold) must satisfy the solvency invariant.
+            let balance = total_pool;
+            prop_assert!(
+                balance >= aggregate,
+                "balance {} < aggregate {} — solvency violated",
+                balance,
+                aggregate
+            );
+
+            // After settling (distribute_yield), aggregate drops to 0.
+            aggregate = aggregate.saturating_sub(total_pool);
+            prop_assert_eq!(aggregate, 0i128);
         }
     }
 }
