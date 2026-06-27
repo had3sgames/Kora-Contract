@@ -255,7 +255,7 @@ impl InvoiceNftContract {
             &(id.checked_add(1).ok_or(KoraError::ArithmeticOverflow)?),
         );
 
-        events::invoice_created(&env, id, &sme, invoice.amount);
+        events::invoice_created(&env, id, &sme, amount);
         Ok(id)
     }
 
