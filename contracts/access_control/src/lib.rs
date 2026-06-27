@@ -312,7 +312,7 @@ impl AccessControlContract {
         }
 
         for i in 0..proposal.approvals.len() {
-            if proposal.approvals.get(i).ok_or(KoraError::Unauthorized)? == approver {
+            if proposal.approvals.get(i).unwrap() == approver {
                 return Err(KoraError::AlreadyApproved);
             }
         }
@@ -522,7 +522,7 @@ impl AccessControlContract {
 
     fn require_signer(config: &MultisigConfig, caller: &Address) -> Result<(), KoraError> {
         for i in 0..config.signers.len() {
-            if &config.signers.get(i).ok_or(KoraError::Unauthorized)? == caller {
+            if &config.signers.get(i).unwrap() == caller {
                 return Ok(());
             }
         }
