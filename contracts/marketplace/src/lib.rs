@@ -121,7 +121,7 @@ impl MarketplaceContract {
             .persistent()
             .set(&DataKey::WhitelistedToken(token.clone()), &true);
         Self::bump_persistent(&env, &DataKey::WhitelistedToken(token.clone()));
-        events::token_whitelisted(&env, &admin, &token);
+        events::token_whitelisted(&env, &token);
         Ok(())
     }
 
@@ -282,7 +282,7 @@ impl MarketplaceContract {
 
         events::invoice_funded(&env, invoice_id, &investor, amount);
         if fee > 0 {
-            events::fee_collected(&env, &investor, invoice_id, fee, &listing.token);
+            events::fee_collected(&env, invoice_id, fee, &listing.token);
         }
 
         if fully_funded {
