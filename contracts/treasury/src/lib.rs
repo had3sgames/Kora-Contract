@@ -88,7 +88,7 @@ impl TreasuryContract {
             .set(&DataKey::WhitelistedToken(token.clone()), &true);
         Self::bump_persistent(&env, &DataKey::WhitelistedToken(token.clone()));
 
-        events::token_whitelisted(&env, &token);
+        events::token_whitelisted(&env, &admin, &token);
         Ok(())
     }
 
@@ -113,7 +113,7 @@ impl TreasuryContract {
         env.storage().persistent().set(&key, &new_total);
         Self::bump_persistent(&env, &key);
 
-        events::fee_collected(&env, 0, amount, &token);
+        events::fee_collected(&env, &env.current_contract_address(), 0, amount, &token);
         Ok(())
     }
 
@@ -159,7 +159,7 @@ impl TreasuryContract {
         // ── Interactions ──────────────────────────────────────────────────────
         token_client.transfer(&env.current_contract_address(), &recipient, &amount);
 
-        events::fee_withdrawn(&env, &token, amount);
+        events::fee_withdrawn(&env, &admin, &token, amount);
         Ok(())
     }
 

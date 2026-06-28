@@ -54,7 +54,7 @@ impl RiskRegistryContract {
         Self::require_admin(&env, &admin)?;
         env.storage().persistent().set(&DataKey::Admin, &new_admin);
         Self::bump_persistent(&env, &DataKey::Admin);
-        events::admin_transferred(&env, &new_admin);
+        events::admin_transferred(&env, &admin, &new_admin);
         Ok(())
     }
 
